@@ -1,0 +1,12 @@
+[package]
+name = "nova_kernel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+x86_64 = "0.15.5"
+lazy_static = { version = "1.5", features = ["spin_no_std"] }
+pic8259 = "0.11"
+spin = "0.9"
+bootloader_api = "0.11.17"
+embedded-sdmmc = { version = "0.8", default-features = false }

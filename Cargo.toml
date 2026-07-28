@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+
+members = [
+    "Kernel",
+    "os",
+]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
