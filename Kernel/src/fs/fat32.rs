@@ -1,3 +1,5 @@
+use core::result;
+
 use super::block::BlockDevice;
 use crate::fs::directory::DirectoryEntry;
 
@@ -348,6 +350,7 @@ impl<D: BlockDevice> Fat32<D> {
 
         Some(new_cluster)
     }
+
     pub fn extend_file(
         &mut self,
         start_cluster: u32,
@@ -366,77 +369,5 @@ impl<D: BlockDevice> Fat32<D> {
 
 
         Some(last)
-    }
-    pub fn create_entry(
-        &mut self,
-        directory_cluster: u32,
-        entry: &DirectoryEntry,
-    ) -> Option<u32> {
-
-        // 自動配置第一個 cluster
-        let first_cluster =
-            self.allocate_cluster()?;
-
-
-        // 讀整個目錄
-        let mut buffer = [0u8; 512];
-
-        self.read_cluster(
-            directory_cluster,
-            &mut buffer,
-        );
-
-
-        // 找空的 Directory Entry
-        let mut offset = 0;
-
-        while offset < 512 {
-
-            // 0x00 = 後面都沒有 Entry
-            // 0xE5 = 已刪除 Entry
-            if buffer[offset] == 0x00 ||
-            buffer[offset] == 0xE5 {
-
-                // 檔名
-                buffer[offset..offset + 11]
-                    .copy_from_slice(&entry.name);
-
-                // Attribute
-                buffer[offset + 11] =
-                    entry.attr;
-
-                // High Cluster
-                buffer[offset + 20..offset + 22]
-                    .copy_from_slice(
-                        &0u16.to_le_bytes()
-                    );
-
-                // Low Cluster
-                buffer[offset + 26..offset + 28]
-                    .copy_from_slice(
-                        &(first_cluster as u16)
-                            .to_le_bytes()
-                    );
-
-                // File Size
-                buffer[offset + 28..offset + 32]
-                    .copy_from_slice(
-                        &entry.file_size
-                            .to_le_bytes()
-                    );
-
-                // 寫回磁碟
-                self.write_cluster(
-                    directory_cluster,
-                    &buffer,
-                );
-
-                return Some(first_cluster);
-            }
-
-            offset += 32;
-        }
-
-        None
     }
 }

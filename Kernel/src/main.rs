@@ -28,6 +28,7 @@ use drivers::framebuffer::{
     draw_orange_screen,
 };
 
+use crate::fs::directory::DirectoryEntry;
 
 use bootloader_api::{entry_point, BootInfo};
 
@@ -230,31 +231,22 @@ fn kernel_main(
             &mut memory
         );
 
-    let mut fat =
+    let mut fat32 =
         Fat32::mount(disk);
+    
+    let root = DirectoryEntry {
+        name: *b"ROOT       ",
+        attr: 0x10, // directory
+        first_cluster: None,
+        file_size: 0,
+    };
 
-    let last =
-        fat.extend_file(
-            3,
-            2
-        );
-
-
-    assert!(last == Some(5));
-
-
-    assert!(
-        fat.read_fat_entry(3) == 4
+    let root_cluster = fat32.create_entry(
+        2, // root cluster
+        &root,
     );
 
-    assert!(
-        fat.read_fat_entry(4) == 5
-    );
 
-    assert!(
-        fat.read_fat_entry(5)
-        >= 0x0FFFFFF8
-    );    
     loop {
 
 
