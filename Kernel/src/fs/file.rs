@@ -2,7 +2,7 @@ use crate::fs;
 use crate::fs::block::BlockDevice;
 use crate::fs::dir_entry::DirectoryEntry;
 use crate::fs::fat32::Fat32;
-
+use crate::fs::file_location::FileLocation;
 
 pub struct File<'a, D: BlockDevice> {
 
@@ -14,6 +14,9 @@ pub struct File<'a, D: BlockDevice> {
 
     pub position:
         u32,
+    
+    pub location:
+        fs::file_location::FileLocation,
 }
 
 
@@ -25,67 +28,40 @@ impl<'a, D: BlockDevice> File<'a, D> {
     pub fn read(
         &mut self,
         buffer: &mut [u8;512],
-    )
-    -> usize {
-
+    ) -> usize {
 
         let cluster =
-            match self.entry.first_cluster {
+            match self.location.cluster {
 
-                Some(c) => c,
+                0 => return 0,
 
-                None => {
-                    return 0;
-                }
-
+                c => c,
             };
 
 
-        let mut current_cluster =
-            cluster;
-
-
-        // 目前在第幾個 cluster
-        let mut skip =
-            self.position / 512;
-
-
-        // 沿 FAT chain 找位置
-        while skip > 0 {
-
-
-            let next =
-                self.fs.read_fat_entry(
-                    current_cluster
-                );
-
-
-            // EOF
-            if next >= 0x0FFFFFF8 {
-
-                return 0;
-
-            }
-
-
-            current_cluster =
-                next;
-
-
-            skip -= 1;
-
-        }
-
-
-
-        // 讀 cluster
         self.fs.read_cluster(
-            current_cluster,
+            cluster,
             buffer,
         );
 
 
         self.position += 512;
+
+
+        let next =
+            self.fs.read_fat_entry(cluster);
+
+
+        if next < 0x0FFFFFF8 {
+
+            self.location.cluster = next;
+            self.location.offset = 0;
+
+        } else {
+
+            self.location.offset = 512;
+
+        }
 
 
         512
@@ -100,6 +76,7 @@ impl<'a, D: BlockDevice> File<'a, D> {
             fs,
             entry,
             position: 0,
+            location:  FileLocation::new(entry.first_cluster.unwrap_or(0), 0),
         }
     }
 
@@ -189,6 +166,7 @@ impl<'a, D: BlockDevice> File<'a, D> {
                 fs,
                 entry,
                 position: 0,
+                location:  FileLocation::new(entry.first_cluster.unwrap_or(0), 0),
             }
         );
         

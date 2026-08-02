@@ -1,6 +1,7 @@
 use super::fat32::Fat32;
 pub use super::dir_entry::DirectoryEntry;
 use crate::fs::block::BlockDevice;
+use crate::fs::file_location::FileLocation;
 
 impl <D: BlockDevice> Fat32 <D>{
 
@@ -415,6 +416,38 @@ impl <D: BlockDevice> Fat32 <D>{
             }
         }
 
+
+        None
+    }
+    pub fn find_entry_with_location(
+        &mut self,
+        directory_cluster: u32,
+        name: &[u8; 11],
+    ) -> Option<(DirectoryEntry, FileLocation)> {
+
+        let mut entries = [DirectoryEntry {
+            name: [0u8; 11],
+            attr: 0,
+            first_cluster: None,
+            file_size: 0,
+        }; 30];
+
+        let count = self.read_directory(directory_cluster, &mut entries);
+
+        for i in 0..count {
+            if &entries[i].name == name {
+
+                let location = FileLocation::new(
+                    directory_cluster,
+                    i * 32,
+                );
+
+                return Some((
+                    entries[i].clone(),
+                    location,
+                ));
+            }
+        }
 
         None
     }

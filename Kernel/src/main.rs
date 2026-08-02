@@ -51,31 +51,6 @@ struct Mouse {
     right:bool,
 }
 
-fn fs_test(fs: &mut Fat32)-> Result<(), Error>{
-    let mut file =
-        File::open(
-            &mut fs,
-            root,
-            "TEST.TXT",
-        )?;
-
-
-    file.write(
-        b"hello"
-    );
-
-
-    let mut buf =
-        [0u8;512];
-
-
-    file.position = 0;
-
-
-    file.read(
-        &mut buf
-    );
-}
 
 fn kernel_main(
     boot_info: &'static mut BootInfo
@@ -262,56 +237,55 @@ fn kernel_main(
     let mut fat32 =
         Fat32::mount(disk);
         
-    let entry =
-        DirectoryEntry {
+let entry =
+    DirectoryEntry {
 
-            name: *b"TEST    TXT",
+        name:
+            *b"TEST    TXT",
 
-            attr: 0x20,
+        attr:
+            0x20,
 
-            first_cluster: None,
+        first_cluster:
+            None,
 
-            file_size: 0,
-        };
-
-
-    let mut file =
-        File::new(
-            &mut fat32,
-            entry,
-        );
+        file_size:
+            0,
+    };
 
 
-    let cluster =
-        file.write(
-            b"HELLO"
-        )
-        .unwrap();
-
-    let entry =
-        fat32.find_entry(
-            fat32.root_cluster,
-            b"TEST    TXT",
-        )
-        .unwrap();
+let mut file =
+    File::new(
+        &mut fat32,
+        entry,
+    );
 
 
-    let mut file =
-        File::new(
-            &mut fat32,
-            entry,
-        );
+    file.write(
+        b"HELLO",
+    )
+    .unwrap();
+
+
+    file.position = 0;
 
 
     let mut buffer =
         [0u8;512];
 
 
-    let size =
-        file.read(
-            &mut buffer
-        );
+    file.read(
+        &mut buffer,
+    );
 
+
+    let text =
+        core::str::from_utf8(
+            &buffer[..5]
+        )
+        .unwrap_or(
+            "READ ERROR"
+        );
 
 
     if let Some(framebuffer) =
@@ -322,11 +296,26 @@ fn kernel_main(
             framebuffer.info().width as usize;
 
 
-        let text =
-            core::str::from_utf8(
-                &buffer[..size]
-            )
-            .unwrap_or("READ ERROR");
+        draw_string(
+            framebuffer.buffer_mut(),
+            width,
+            10,
+            50,
+            text,
+            [0,255,0],
+        );
+
+    }
+
+
+
+    if let Some(framebuffer) =
+        boot_info.framebuffer.as_mut()
+    {
+
+        let width =
+            framebuffer.info().width as usize;
+
 
 
         draw_string(
@@ -414,25 +403,6 @@ fn kernel_main(
                 mouse.x,
                 mouse.y,
             );
-            if fs_test(&mut fat32).is_err() {
-                draw_string(
-                    buffer,
-                    width,
-                    10,
-                    10,
-                    "FAT32 TEST FAILED",
-                    [255,0,0],
-                );
-            }else {
-                draw_string(
-                    buffer,
-                    width,
-                    10,
-                    10,
-                    "FAT32 TEST PASSED",
-                    [0,255,0],
-                );
-            }
 
 
         }
