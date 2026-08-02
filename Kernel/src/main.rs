@@ -330,6 +330,58 @@ let mut file =
     }
 
 
+    let entry =
+        DirectoryEntry {
+            name: *b"TEST    TXT",
+            attr: 0x20,
+            first_cluster: None,
+            file_size: 0,
+        };
+
+
+    let mut file =
+        File::new(
+            &mut fat32,
+            entry,
+        );
+
+
+    // 寫入測試資料
+    file.write(
+        b"HELLO",
+    )
+    .unwrap();
+
+
+    // 回到開頭
+    file.position = 0;
+
+    file.location.cluster =
+        file.entry.first_cluster.unwrap_or(0);
+
+    file.location.offset = 0;
+
+    // 讀取
+    let mut buffer =
+        [0u8;512];
+
+
+    let size =
+        file.read(
+            &mut buffer
+        );
+
+
+    // 第二次讀，應該 EOF
+    // let size2 =
+    //     file.read(
+    //         &mut buffer
+    //     );
+
+
+    let text = "READ FINISHED";
+
+
 
 
     loop {
@@ -405,12 +457,43 @@ let mut file =
             );
 
 
+        }    
+        if let Some(framebuffer) =
+            boot_info.framebuffer.as_mut()
+        {
+
+            let width =
+                framebuffer.info().width as usize;
+
+
+            draw_string(
+                framebuffer.buffer_mut(),
+                width,
+                10,
+                50,
+                text,
+                [0,255,0],
+            );
+
+
+            draw_string(
+                framebuffer.buffer_mut(),
+                width,
+                10,
+                70,
+                if size == 5 {
+                    "TEST PASS"
+                } else {
+                    "TEST FAIL"
+                },
+                [0,255,0],
+            );
         }
 
 
 
-        x86_64::instructions::hlt();
 
+        x86_64::instructions::hlt();
     }
 }
 
