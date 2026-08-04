@@ -61,7 +61,40 @@ impl DirectoryEntry {
         short
 
     }   
-    
+
+
+    pub fn to_bytes(
+        &self,
+    ) -> [u8; 32] {
+
+        let mut bytes = [0u8; 32];
+
+        bytes[0..11]
+            .copy_from_slice(&self.name);
+
+        bytes[11] = self.attr;
+
+        let cluster =
+            self.first_cluster.unwrap_or(0);
+
+        bytes[20..22]
+            .copy_from_slice(
+                &((cluster >> 16) as u16).to_le_bytes()
+            );
+
+        bytes[26..28]
+            .copy_from_slice(
+                &(cluster as u16).to_le_bytes()
+            );
+
+        bytes[28..32]
+            .copy_from_slice(
+                &self.file_size.to_le_bytes()
+            );
+
+        bytes
+    }
+       
 }
 
 

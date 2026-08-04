@@ -451,4 +451,29 @@ impl <D: BlockDevice> Fat32 <D>{
 
         None
     }
+    pub fn write_dir_entry(
+        &mut self,
+        location: FileLocation,
+        entry: &DirectoryEntry,
+    ) -> Option<()> {
+
+        let mut buffer = [0u8; 512];
+
+        self.read_cluster(
+            location.cluster,
+            &mut buffer,
+        );
+
+        // Serialize the directory entry into the buffer
+        let entry_bytes = entry.to_bytes();
+        buffer[location.offset..location.offset + 32].copy_from_slice(&entry_bytes);
+
+        // Write the modified buffer back to the cluster
+        self.write_cluster(
+            location.cluster,
+            &buffer,
+        );
+
+        Some(())
+    }
 }

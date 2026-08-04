@@ -1,3 +1,4 @@
+#[derive(Debug, Clone, Copy)]
 pub struct FileLocation {
 
     pub cluster: u32,

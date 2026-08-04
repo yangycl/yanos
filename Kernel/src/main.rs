@@ -21,6 +21,7 @@ use drivers::keyboard::{
 };
 
 mod fs;
+mod yashell;
 
 use drivers::framebuffer::{
     draw_rect,
@@ -31,6 +32,7 @@ use drivers::framebuffer::{
 };
 
 use crate::fs::directory::DirectoryEntry;
+use crate::fs::file_location::FileLocation;
 
 use bootloader_api::{entry_point, BootInfo};
 
@@ -381,7 +383,7 @@ let mut file =
 
     let text = "READ FINISHED";
 
-
+    // Yashell is available explicitly when needed.
 
 
     loop {
@@ -515,7 +517,30 @@ fn panic(info: &PanicInfo) -> ! {
             let width = framebuffer.info().width as usize;
 
             draw_orange_screen(framebuffer);
-            draw_string(framebuffer.buffer_mut(), width, 10, 10, info.message().as_str().unwrap_or("UNKNOWN ERROR"), [255, 0, 0]);
+            // Only show location if available, otherwise a generic message
+            if let Some(loc) = info.location() {
+                let file = loc.file();
+                let line = loc.line();
+                let mut buf = [0u8; 96];
+                let mut pos = 0usize;
+                for &b in b"panic at " { if pos < buf.len() { buf[pos] = b; pos += 1; } }
+                for &b in file.as_bytes() { if pos < buf.len() { buf[pos] = b; pos += 1; } }
+                if pos < buf.len() { buf[pos] = b':'; pos += 1; }
+                let mut tmp = [0u8; 12];
+                let mut n = 0usize;
+                let mut v = line;
+                if v == 0 { tmp[n] = b'0'; n += 1; }
+                while v > 0 && n < tmp.len() {
+                    tmp[n] = b'0' + (v % 10) as u8;
+                    v /= 10;
+                    n += 1;
+                }
+                for i in 0..n { if pos < buf.len() { buf[pos] = tmp[n - 1 - i]; pos += 1; } }
+                let loc_str = core::str::from_utf8(&buf[..pos]).unwrap_or("panic at <unknown>");
+                draw_string(framebuffer.buffer_mut(), width, 10, 10, loc_str, [255,0,0]);
+            } else {
+                draw_string(framebuffer.buffer_mut(), width, 10, 10, "panic (no location)", [255,0,0]);
+            }
 
         }
 
@@ -526,3 +551,4 @@ fn panic(info: &PanicInfo) -> ! {
         x86_64::instructions::hlt();
     }
 }
+

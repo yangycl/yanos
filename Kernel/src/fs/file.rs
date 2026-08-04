@@ -17,6 +17,9 @@ pub struct File<'a, D: BlockDevice> {
     
     pub location:
         fs::file_location::FileLocation,
+
+    pub entry_location:
+        fs::file_location::FileLocation,
 }
 
 
@@ -92,11 +95,26 @@ impl<'a, D: BlockDevice> File<'a, D> {
         entry: DirectoryEntry,
     ) -> Self {
 
+        // Try to find the directory entry location in the root directory.
+        // If it's missing, create the directory entry and retry the lookup.
+        let maybe = fs.find_entry_with_location(fs.root_cluster, &entry.name);
+        let (_found, entry_location) = match maybe {
+            Some(tuple) => tuple,
+            None => {
+                // attempt to create the entry in root
+                let _ = fs.create_entry(fs.root_cluster, &entry);
+                // retry lookup; if still missing, panic because something is wrong
+                fs.find_entry_with_location(fs.root_cluster, &entry.name)
+                    .expect("entry_not_found_after_create")
+            }
+        };
+
         Self {
             fs,
             entry,
             position: 0,
-            location:  FileLocation::new(entry.first_cluster.unwrap_or(0), 0),
+            location: FileLocation::new(entry.first_cluster.unwrap_or(0), 0),
+            entry_location,
         }
     }
 
@@ -147,7 +165,7 @@ impl<'a, D: BlockDevice> File<'a, D> {
             };
 
 
-        let mut buffer =
+        let mut buffer: [u8; 512] =
             [0u8;512];
 
 
@@ -177,17 +195,41 @@ impl<'a, D: BlockDevice> File<'a, D> {
 
     pub fn open (fs: &'a mut Fat32<D>, root_cluster: u32, name: &str) -> Option<Self> {
 
-        let entry =
-            fs.resolve_path(
-                root_cluster,
-                name,
-            )?;
+        let mut current_cluster: u32 = root_cluster;
+        let mut entry_location: FileLocation = FileLocation::new(0, 0);
+        let mut entry: Option<DirectoryEntry> = None;
+
+        let mut components =
+            name.split('/').filter(|x| !x.is_empty()).peekable();
+
+        while let Some(component) = components.next() {
+            let short_name =
+                DirectoryEntry::format_short_name(component);
+
+            let (found, location) =
+                fs.find_entry_with_location(
+                    current_cluster,
+                    &short_name,
+                )?;
+
+            if components.peek().is_some() {
+                current_cluster =
+                    found.first_cluster?;
+            } else {
+                entry = Some(found);
+                entry_location = location;
+            }
+        }
+
+        let entry = entry?;
+
         return Some(
             Self {
                 fs,
                 entry,
                 position: 0,
-                location:  FileLocation::new(entry.first_cluster.unwrap_or(0), 0),
+                location: FileLocation::new(entry.first_cluster.unwrap_or(0), 0),
+                entry_location: entry_location,
             }
         );
         
@@ -207,7 +249,7 @@ impl<'a, D: BlockDevice> File<'a, D> {
             None => {
                 let c = self.fs.allocate_cluster()?;
                 self.entry.first_cluster = Some(c);
-                self.location.cluster = c;
+                self.location = FileLocation::new(c, 0);
                 c
             }
         };
@@ -275,12 +317,17 @@ impl<'a, D: BlockDevice> File<'a, D> {
 
         self.entry.file_size += written as u32;
         self.position = self.entry.file_size;
-        self.location.cluster = cluster;
-        self.location.offset = (self.entry.file_size % 512) as usize;
+        self.location = FileLocation::new(cluster, (self.entry.file_size % 512) as usize);
 
+        self.fs.write_dir_entry(
+            self.entry_location,
+            &self.entry,
+        );
         Some(written)
     }
 
 }
+
+
 
 

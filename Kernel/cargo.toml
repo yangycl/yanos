@@ -10,3 +10,4 @@ pic8259 = "0.11"
 spin = "0.9"
 bootloader_api = "0.11.17"
 embedded-sdmmc = { version = "0.8", default-features = false }
+heapless = "0.7.14"
