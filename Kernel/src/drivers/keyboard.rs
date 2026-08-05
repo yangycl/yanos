@@ -118,23 +118,57 @@ impl KeyboardDecoder {
     pub const fn new() -> Self { Self { extended:false } }
 
     pub fn process(&mut self) -> Option<KeyEvent> {
-        loop {
-            let scan_code = interrupts::get_key()?;
-            if scan_code == 0xE0 { self.extended = true; continue; }
-            if self.extended {
-                self.extended = false;
-                return match scan_code {
-                    0x48 => Some(KeyEvent::UpPress),
-                    0x50 => Some(KeyEvent::DownPress),
-                    0x4B => Some(KeyEvent::LeftPress),
-                    0x4D => Some(KeyEvent::RightPress),
-                    0xC8 => Some(KeyEvent::UpRelease),
-                    0xD0 => Some(KeyEvent::DownRelease),
-                    0xCB => Some(KeyEvent::LeftRelease),
-                    0xCD => Some(KeyEvent::RightRelease),
-                    _ => None,
-                };
-            }
+
+        // 先看第一個 byte
+        let first = interrupts::peek_key()?;
+
+
+        // 不是 E0 擴展鍵，不碰它
+        // 留給 read_char()
+        if first != 0xE0 {
+            return None;
+        }
+
+
+        // 移除 E0
+        interrupts::get_key();
+
+
+        // 取得第二個 byte
+        let scan_code =
+            interrupts::get_key()?;
+
+
+        match scan_code {
+
+            0x48 =>
+                Some(KeyEvent::UpPress),
+
+            0x50 =>
+                Some(KeyEvent::DownPress),
+
+            0x4B =>
+                Some(KeyEvent::LeftPress),
+
+            0x4D =>
+                Some(KeyEvent::RightPress),
+
+
+            0xC8 =>
+                Some(KeyEvent::UpRelease),
+
+            0xD0 =>
+                Some(KeyEvent::DownRelease),
+
+            0xCB =>
+                Some(KeyEvent::LeftRelease),
+
+            0xCD =>
+                Some(KeyEvent::RightRelease),
+
+
+            _ =>
+                None,
         }
     }
 }

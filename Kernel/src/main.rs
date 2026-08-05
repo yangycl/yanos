@@ -34,6 +34,8 @@ use drivers::framebuffer::{
 use crate::fs::directory::DirectoryEntry;
 use crate::fs::file_location::FileLocation;
 
+mod explorer;
+
 use bootloader_api::{entry_point, BootInfo};
 
 
@@ -239,28 +241,28 @@ fn kernel_main(
     let mut fat32 =
         Fat32::mount(disk);
         
-let entry =
-    DirectoryEntry {
+    let entry =
+        DirectoryEntry {
 
-        name:
-            *b"TEST    TXT",
+            name:
+                *b"TEST    TXT",
 
-        attr:
-            0x20,
+            attr:
+                0x20,
 
-        first_cluster:
-            None,
+            first_cluster:
+                None,
 
-        file_size:
-            0,
-    };
+            file_size:
+                0,
+        };
 
 
-let mut file =
-    File::new(
-        &mut fat32,
-        entry,
-    );
+    let mut file =
+        File::new(
+            &mut fat32,
+            entry,
+        );
 
 
     file.write(
@@ -290,46 +292,8 @@ let mut file =
         );
 
 
-    if let Some(framebuffer) =
-        boot_info.framebuffer.as_mut()
-    {
-
-        let width =
-            framebuffer.info().width as usize;
 
 
-        draw_string(
-            framebuffer.buffer_mut(),
-            width,
-            10,
-            50,
-            text,
-            [0,255,0],
-        );
-
-    }
-
-
-
-    if let Some(framebuffer) =
-        boot_info.framebuffer.as_mut()
-    {
-
-        let width =
-            framebuffer.info().width as usize;
-
-
-
-        draw_string(
-            framebuffer.buffer_mut(),
-            width,
-            10,
-            50,
-            text,
-            [0,0,0],
-        );
-
-    }
 
 
     let entry =
@@ -347,44 +311,9 @@ let mut file =
             entry,
         );
 
-
-    // 寫入測試資料
-    file.write(
-        b"HELLO",
-    )
-    .unwrap();
-
-
-    // 回到開頭
-    file.position = 0;
-
-    file.location.cluster =
-        file.entry.first_cluster.unwrap_or(0);
-
-    file.location.offset = 0;
-
-    // 讀取
-    let mut buffer =
-        [0u8;512];
-
-
-    let size =
-        file.read(
-            &mut buffer
-        );
-
-
-    // 第二次讀，應該 EOF
-    // let size2 =
-    //     file.read(
-    //         &mut buffer
-    //     );
-
-
-    let text = "READ FINISHED";
-
-    // Yashell is available explicitly when needed.
-
+    //explorer
+    let mut is_explorer_running = true;
+    let mut explorer = explorer::explorer::Explorer::new();
 
     loop {
 
@@ -397,6 +326,26 @@ let mut file =
             keyboard_state.update(event);
 
         }
+
+        //explorer
+
+        if let Some(ch) = drivers::keyboard::read_char() {
+            match ch {
+                'q' => {
+                    is_explorer_running = false;
+                }
+
+                'e' => {
+                    is_explorer_running = true;
+
+                    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+                        explorer.draw(framebuffer);
+                    }
+                }
+                _ => {}
+            }
+        }        
+
 
         let oldx = mouse.x;
         let oldy = mouse.y;
@@ -426,9 +375,20 @@ let mut file =
 
         // 畫面
 
-        if moved && let Some(framebuffer) = boot_info.framebuffer.as_mut()//避免原地閃
+        if is_explorer_running && let Some(framebuffer) = boot_info.framebuffer.as_mut()//避免原地閃
         {
 
+            if let Some(event) = keyboard.process() {
+
+                explorer.update(event);
+
+            }
+
+
+        } 
+
+        if moved && !is_explorer_running && let Some(framebuffer) = boot_info.framebuffer.as_mut()//避免原地閃
+        {
             let width =
                 framebuffer.info().width as usize;
 
@@ -457,44 +417,7 @@ let mut file =
                 mouse.x,
                 mouse.y,
             );
-
-
-        }    
-        if let Some(framebuffer) =
-            boot_info.framebuffer.as_mut()
-        {
-
-            let width =
-                framebuffer.info().width as usize;
-
-
-            draw_string(
-                framebuffer.buffer_mut(),
-                width,
-                10,
-                50,
-                text,
-                [0,255,0],
-            );
-
-
-            draw_string(
-                framebuffer.buffer_mut(),
-                width,
-                10,
-                70,
-                if size == 5 {
-                    "TEST PASS"
-                } else {
-                    "TEST FAIL"
-                },
-                [0,255,0],
-            );
         }
-
-
-
-
         x86_64::instructions::hlt();
     }
 }

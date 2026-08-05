@@ -164,3 +164,14 @@ pub fn get_key() -> Option<u8>
         .lock()
         .pop()
 }
+
+pub fn peek_key() -> Option<u8>
+{
+    let queue = KEYBOARD_QUEUE.lock();
+
+    if queue.read == queue.write {
+        return None;
+    }
+
+    Some(queue.buffer[queue.read])
+}

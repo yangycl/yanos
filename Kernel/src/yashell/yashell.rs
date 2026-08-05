@@ -41,6 +41,99 @@ fn read_line(prompt_x: usize, prompt_y: usize, fb: &mut FrameBuffer) -> heapless
     buf
 }
 
+fn resolve_parent_and_name<D: BlockDevice>(fs: &mut Fat32<D>, cwd: u32, path: &str) -> Option<(u32, [u8;11])> {
+    if path.contains('/') {
+        let absolute = path.starts_with('/');
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() { return None; }
+        let idx = trimmed.rfind('/');
+        let (parent_path, name) = match idx {
+            Some(i) => (&trimmed[..i], &trimmed[i+1..]),
+            None => ("", trimmed),
+        };
+        let base = if absolute { fs.root_cluster } else { cwd };
+        if parent_path.is_empty() {
+            return Some((base, crate::fs::directory::DirectoryEntry::format_short_name(name)));
+        }
+        let entry = fs.resolve_path(base, parent_path)?;
+        let parent_cluster = entry.first_cluster?;
+        Some((parent_cluster, crate::fs::directory::DirectoryEntry::format_short_name(name)))
+    } else {
+        Some((cwd, crate::fs::directory::DirectoryEntry::format_short_name(path)))
+    }
+}
+
+fn execute_command_no_ui<D: BlockDevice>(fs: &mut Fat32<D>, s: &str, cwd: &mut u32) -> bool {
+    use crate::fs::directory::DirectoryEntry;
+    use crate::fs::file::File;
+
+    if s.is_empty() {
+        return false;
+    }
+
+    let mut parts = s.split_whitespace();
+    if let Some(cmd) = parts.next() {
+        match cmd {
+            "help" | "clear" | "ls" | "cat" => {}
+            "write" => {
+                if let Some(name) = parts.next() {
+                    let mut rest = heapless::String::<128>::new();
+                    let mut first = true;
+                    for p in parts {
+                        if !first { rest.push(' ').ok(); }
+                        rest.push_str(p).ok();
+                        first = false;
+                    }
+                    use crate::fs::directory::DirectoryEntry as DirEntry;
+                    let entry = DirEntry { name: DirEntry::format_short_name(name), attr: 0x20, first_cluster: None, file_size: 0 };
+                    fs.create_entry(*cwd, &entry);
+                    if let Some(mut file) = File::open(fs, *cwd, name) {
+                        file.write(rest.as_bytes());
+                    }
+                }
+            }
+            "append" => {
+                if let Some(name) = parts.next() {
+                    let mut rest = heapless::String::<128>::new();
+                    let mut first = true;
+                    for p in parts {
+                        if !first { rest.push(' ').ok(); }
+                        rest.push_str(p).ok();
+                        first = false;
+                    }
+                    if let Some(mut file) = File::open(fs, *cwd, name) {
+                        file.append(rest.as_bytes());
+                    }
+                }
+            }
+            "mkdir" => {
+                if let Some(name) = parts.next() {
+                    if let Some((parent_cluster, short)) = resolve_parent_and_name(fs, *cwd, name) {
+                        let _ = fs.create_directory(parent_cluster, short);
+                    }
+                }
+            }
+            "cd" => {
+                if let Some(path) = parts.next() {
+                    let absolute = path.starts_with('/');
+                    let base = if absolute { fs.root_cluster } else { *cwd };
+                    if let Some(entry) = fs.resolve_path(base, path) {
+                        if entry.attr & 0x10 != 0 {
+                            if let Some(cluster) = entry.first_cluster {
+                                *cwd = cluster;
+                            }
+                        }
+                    }
+                }
+            }
+            "exit" => return true,
+            _ => {}
+        }
+    }
+
+    false
+}
+
 fn execute_command<D: BlockDevice>(
     fs: &mut Fat32<D>,
     framebuffer: &mut FrameBuffer,
@@ -201,13 +294,9 @@ fn execute_command<D: BlockDevice>(
     false
 }
 
-pub fn run_command<D: BlockDevice>(fs: &mut Fat32<D>, framebuffer: &mut FrameBuffer, command: &str) -> bool {
-    let width = framebuffer.info().width as usize;
-    let height = framebuffer.info().height as usize;
-    let prompt_x = 10;
-    let mut current_y = 10;
-    let mut cwd = fs.root_cluster;
-    execute_command(fs, framebuffer, command, &mut current_y, prompt_x, width, height, &mut cwd)
+pub fn run_command<D: BlockDevice>(_fs: &mut Fat32<D>, command: &str) -> bool {
+    let mut cwd = _fs.root_cluster;
+    execute_command_no_ui(_fs, command, &mut cwd)
 }
 
 pub fn run<D: BlockDevice>(fs: &mut Fat32<D>, framebuffer: &mut FrameBuffer) {
