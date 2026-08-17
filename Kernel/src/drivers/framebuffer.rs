@@ -3,21 +3,25 @@ use crate::drivers::framebuffer::wordbitmap::FONT_LOWER;
 mod wordbitmap;
 
 
-fn draw_pixel(
-    buffer: &mut [u8],
-    width: usize,
-    x: usize,
-    y: usize,
-    color: [u8; 3],
-) {
-    let index = (y * width + x) * 3;
+    fn draw_pixel(
+        buffer: &mut [u8],
+        width: usize,
+        x: usize,
+        y: usize,
+        color: [u8; 3],
+    ) {
+        let index = (y * width + x) * 4;
 
-    if index + 2 < buffer.len() {
-        buffer[index] = color[0];     // B
-        buffer[index + 1] = color[1]; // G
-        buffer[index + 2] = color[2]; // R
+        if index + 3 < buffer.len() {
+            buffer[index] = color[2];         // B
+            buffer[index + 1] = color[1];     // G
+            buffer[index + 2] = color[0];     // R
+            buffer[index + 3] = 0;             // padding
+        }
     }
-}
+
+
+
 
 
 pub fn draw_cursor(
@@ -62,26 +66,27 @@ pub fn draw_cursor(
     }
 }
 
-pub fn draw_rect(
-    buffer: &mut [u8],
-    width: usize,
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    color: [u8; 3],
-) {
-    for yy in y..y+h {
-        for xx in x..x+w {
-
-            let index = (yy * width + xx) * 3;
-
-            buffer[index] = color[0];
-            buffer[index + 1] = color[1];
-            buffer[index + 2] = color[2];
+    pub fn draw_rect(
+        buffer: &mut [u8],
+        width: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        color: [u8; 3],
+    ) {
+        for yy in y..y + h {
+            for xx in x..x + w {
+                draw_pixel(
+                    buffer,
+                    width,
+                    xx,
+                    yy,
+                    color,
+                );
+            }
         }
     }
-}
 
 pub fn draw_char(
     buffer: &mut [u8],

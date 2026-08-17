@@ -35,6 +35,7 @@ use crate::fs::directory::DirectoryEntry;
 use crate::fs::file_location::FileLocation;
 
 mod explorer;
+mod memory;
 
 use bootloader_api::{entry_point, BootInfo};
 
@@ -313,8 +314,13 @@ fn kernel_main(
 
     //explorer
     let mut is_explorer_running = true;
-    let mut explorer = explorer::explorer::Explorer::new();
+    let mut explorer =
+        explorer::explorer::Explorer::new(
+            fat32.root_cluster,
+        );
 
+    // Fake USB HID: modifier=0, key 'e' = usage 0x08
+    crate::interrupts::push_usb_report([0, 0, 0x08, 0, 0, 0, 0, 0]);
     loop {
 
 
@@ -339,7 +345,10 @@ fn kernel_main(
                     is_explorer_running = true;
 
                     if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-                        explorer.draw(framebuffer);
+                        explorer.draw(
+                            framebuffer,
+                            &mut fat32,
+                        );
                     }
                 }
                 _ => {}

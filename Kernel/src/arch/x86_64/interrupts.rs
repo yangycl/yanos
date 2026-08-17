@@ -175,3 +175,52 @@ pub fn peek_key() -> Option<u8>
 
     Some(queue.buffer[queue.read])
 }
+
+
+const USB_REPORT_QUEUE_SIZE: usize = 16;
+
+struct UsbReportQueue {
+    buffer: [[u8; 8]; USB_REPORT_QUEUE_SIZE],
+    read: usize,
+    write: usize,
+}
+
+impl UsbReportQueue {
+    const fn new() -> Self {
+        Self {
+            buffer: [[0; 8]; USB_REPORT_QUEUE_SIZE],
+            read: 0,
+            write: 0,
+        }
+    }
+
+    fn push(&mut self, report: [u8; 8]) {
+        let next = (self.write + 1) % USB_REPORT_QUEUE_SIZE;
+        if next != self.read {
+            self.buffer[self.write] = report;
+            self.write = next;
+        }
+    }
+
+    fn pop(&mut self) -> Option<[u8; 8]> {
+        if self.read == self.write {
+            return None;
+        }
+        let v = self.buffer[self.read];
+        self.read = (self.read + 1) % USB_REPORT_QUEUE_SIZE;
+        Some(v)
+    }
+}
+
+static USB_REPORT_QUEUE: Mutex<UsbReportQueue> =
+    Mutex::new(UsbReportQueue::new());
+
+/// USB 驅動把 Boot Protocol 8-byte report 推進來
+pub fn push_usb_report(report: [u8; 8]) {
+    USB_REPORT_QUEUE.lock().push(report);
+}
+
+/// keyboard.rs 使用
+pub fn get_usb_report() -> Option<[u8; 8]> {
+    USB_REPORT_QUEUE.lock().pop()
+}
