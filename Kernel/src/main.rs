@@ -30,6 +30,8 @@ use drivers::framebuffer::{
     draw_char,
     draw_orange_screen,
 };
+use crate::drivers::pci::find_xhci_bar0;
+
 
 use crate::fs::directory::DirectoryEntry;
 use crate::fs::file_location::FileLocation;
@@ -56,6 +58,12 @@ struct Mouse {
     right:bool,
 }
 
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+#[repr(align(4096))]
+static mut HEAP: [u8; 2 * 1024 * 1024] = [0; 2 * 1024 * 1024];
+
 
 fn kernel_main(
     boot_info: &'static mut BootInfo
@@ -76,6 +84,19 @@ fn kernel_main(
         }
     }
 
+    unsafe {
+        ALLOCATOR.lock().init(HEAP.as_mut_ptr() as usize, HEAP.len());
+    }
+
+
+    use crate::drivers::pci::find_xhci_bar0;
+
+    if let Some(bar0) = find_xhci_bar0() {
+        // 有 xHCI，bar0 是 MMIO 基址
+    } else {
+        // 沒找到
+    }
+    
     //白色長方形桌面
     if let Some(framebuffer) = 
     boot_info.framebuffer.as_mut() {
@@ -320,7 +341,7 @@ fn kernel_main(
         );
 
     // Fake USB HID: modifier=0, key 'e' = usage 0x08
-    crate::interrupts::push_usb_report([0, 0, 0x08, 0, 0, 0, 0, 0]);
+    // crate::interrupts::push_usb_report([0, 0, 0x08, 0, 0, 0, 0, 0]);
     loop {
 
 
