@@ -71,7 +71,7 @@ int 0x80 / syscall 系統呼叫分派器 / System call dispatcher
 📬 How to Submit a Pull Request / 如何提交 Pull Request
 Fork 本儲存庫並建立 Feature 分支 (git checkout -b feature/usb-uhci-driver) / Fork the repository and create a feature branch.
 
-請確保新增程式碼通過 cargo clippy 與 cargo fmt 檢查，且不使用 std 標準庫 (#![no_std]) / Ensure code passes cargo clippy and cargo fmt checks without using the standard library (#![no_std]).
+請確保新增程式碼通過 cargo clippy 、 cargo fmt 以及 cargo check 檢查，且不使用 std 標準庫 (#![no_std]) / Ensure code passes cargo clippy , cargo fmt and cargo check checks without using the standard library (#![no_std]).
 
 確保 cargo build 能成功編譯且於 QEMU 無 Panic / Triple Fault / Ensure cargo build compiles cleanly without causing Panics or Triple Faults in QEMU.
 
