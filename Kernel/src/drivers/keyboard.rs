@@ -411,3 +411,13 @@ pub fn read_char() -> Option<char> {
 pub fn push_hid_report(report: [u8; 8]) {
     interrupts::push_usb_report(report);
 }
+
+use usb_oxide::KeyboardReport;
+
+pub fn push_keyboard_report(report: &KeyboardReport) {
+    let mut raw = [0u8; 8];
+    raw[0] = report.modifiers;
+    raw[1] = report.reserved;
+    raw[2..8].copy_from_slice(&report.keys);
+    interrupts::push_usb_report(raw);
+}

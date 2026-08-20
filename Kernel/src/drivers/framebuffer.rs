@@ -192,37 +192,40 @@ pub fn draw_string(
     width: usize,
     x: usize,
     y: usize,
-    text: &str,
-    color: [u8;3],
+    s: &str,
+    color: [u8; 3],
 ) {
 
-    let mut cursor_x = x;
-    let mut cursor_y = y;
+    let mut current_x = x; // 補上這一行
+    let mut current_y = y; // 補上這一行
 
-
-    for c in text.chars() {
+    for c in s.chars() {
 
         // 換行
         if c == '\n' {
 
-            cursor_x = x;
-            cursor_y += 8;
+            current_x = x;
+            current_y += 8;
 
             continue;
         }
 
+        if c == ' ' {
+            current_x += 8;
+            continue;
+        }
 
         draw_char(
             buffer,
             width,
-            cursor_x,
-            cursor_y,
+            current_x,
+            current_y,
             c,
             color,
         );
 
 
-        cursor_x += 8;
+        current_x += 8;
     }
 }
 

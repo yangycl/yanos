@@ -4,6 +4,11 @@
 
 #![feature(abi_x86_interrupt)]
 
+#![no_std]
+#![no_main]
+
+extern crate alloc;
+
 mod arch;
 mod drivers;
 
@@ -36,6 +41,8 @@ use crate::drivers::pci::find_xhci_bar0;
 use crate::fs::directory::DirectoryEntry;
 use crate::fs::file_location::FileLocation;
 
+use linked_list_allocator::LockedHeap;
+
 mod explorer;
 mod memory;
 
@@ -58,11 +65,17 @@ struct Mouse {
     right:bool,
 }
 
+
+
+const HEAP_SIZE: usize = 1024 * 1024; // 1MB Heap
+
+#[repr(C, align(4096))]
+struct HeapSpace([u8; HEAP_SIZE]);
+
+static mut HEAP_SPACE: HeapSpace = HeapSpace([0; HEAP_SIZE]);
+
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
-
-#[repr(align(4096))]
-static mut HEAP: [u8; 2 * 1024 * 1024] = [0; 2 * 1024 * 1024];
 
 
 fn kernel_main(
@@ -70,33 +83,21 @@ fn kernel_main(
 ) -> ! {
 
     pic::init();
-
     interrupts::init_idt();
-
     x86_64::instructions::interrupts::enable();
 
-    if let Some(framebuffer) =
-        boot_info.framebuffer.as_mut()
-    {
+    unsafe {
+        ALLOCATOR.lock().init(HEAP_SPACE.0.as_mut_ptr(), HEAP_SIZE);
+    }
+
+    // 保存 framebuffer（panic 用）
+    if let Some(fb) = boot_info.framebuffer.as_mut() {
         unsafe {
-            FRAMEBUFFER =
-                Some(framebuffer as *mut _);
+            FRAMEBUFFER = Some(fb as *mut _);
         }
     }
 
-    unsafe {
-        ALLOCATOR.lock().init(HEAP.as_mut_ptr() as usize, HEAP.len());
-    }
-
-
-    use crate::drivers::pci::find_xhci_bar0;
-
-    if let Some(bar0) = find_xhci_bar0() {
-        // 有 xHCI，bar0 是 MMIO 基址
-    } else {
-        // 沒找到
-    }
-    
+        
     //白色長方形桌面
     if let Some(framebuffer) = 
     boot_info.framebuffer.as_mut() {
@@ -119,6 +120,32 @@ fn kernel_main(
             height,
             [255,255,255],
         );
+
+
+        draw_string(buffer, width, 10, 10, "YANOS BOOT", [255, 255, 255]);
+        draw_string(buffer, width, 10, 30, "PCI SCAN...", [255, 255, 255]);
+
+        let xhci_bar = crate::drivers::pci::find_xhci_bar0();
+
+        let width = framebuffer.info().width as usize;
+        let buffer = framebuffer.buffer_mut();
+        match xhci_bar {
+            Some(_) => draw_string(buffer, width, 10, 50, "XHCI OK", [255, 255, 255]),
+            None => draw_string(buffer, width, 10, 50, "NO XHCI", [255, 255, 255]),
+        }
+        draw_string(buffer, width, 10, 70, "USB INIT...", [255, 255, 255]);
+
+        let usb_ok = crate::drivers::usb_host::init(); // 只留一次
+
+        let width = framebuffer.info().width as usize;
+        let buffer = framebuffer.buffer_mut();
+        if usb_ok {
+            draw_string(buffer, width, 10, 90, "HID KBD OK", [255, 255, 255]);
+        } else {
+            draw_string(buffer, width, 10, 90, "NO HID", [255, 255, 255]);
+        }
+
+
     }
     let mut mouse = Mouse{
         x : 600,
@@ -128,6 +155,11 @@ fn kernel_main(
         left:false,
         right:false,
     };
+
+    //鍵盤
+
+    let usb_ok = crate::drivers::usb_host::init();
+    // 可畫 "HID KBD OK" / "NO HID"
 
     let mut keyboard = KeyboardDecoder::new();
 
@@ -334,7 +366,7 @@ fn kernel_main(
         );
 
     //explorer
-    let mut is_explorer_running = true;
+    let mut is_explorer_running = false;
     let mut explorer =
         explorer::explorer::Explorer::new(
             fat32.root_cluster,
@@ -344,110 +376,57 @@ fn kernel_main(
     // crate::interrupts::push_usb_report([0, 0, 0x08, 0, 0, 0, 0, 0]);
     loop {
 
+        
+        crate::drivers::usb_host::poll();
 
-        //滑鼠
-        while let Some(event) =
-            keyboard.process()
-        {
-
+        // 1. 單一事件處理入口
+        while let Some(event) = keyboard.process() {
             keyboard_state.update(event);
-
+            if is_explorer_running {
+                explorer.update(event);
+            }
         }
 
-        //explorer
-
+        // 2. 按鍵切換邏輯
         if let Some(ch) = drivers::keyboard::read_char() {
             match ch {
-                'q' => {
+                'q' => { 
                     is_explorer_running = false;
-                }
+                    if let Some(framebuffer) = 
+                        boot_info.framebuffer.as_mut()  {
+                        let width =
+                            framebuffer.info().width as usize;
 
-                'e' => {
-                    is_explorer_running = true;
+                        let height =
+                            framebuffer.info().height as usize;
 
-                    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-                        explorer.draw(
-                            framebuffer,
-                            &mut fat32,
-                        );
+                        let buffer = framebuffer.buffer_mut();
+
+                        draw_rect(buffer, width, 0, 0, width, height, [255, 255, 255]);
+
                     }
                 }
+                'e' => { is_explorer_running = true; }
                 _ => {}
             }
-        }        
-
-
-        let oldx = mouse.x;
-        let oldy = mouse.y;
-
-        if keyboard_state.up {
-            mouse.y -=5;
         }
 
+        // 3. 畫面繪製分流
+        if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+            if is_explorer_running {
+                // 只有在切換到 explorer 時才畫 explorer 介面
+                explorer.draw(framebuffer, &mut fat32);
+            } else {
+                // 未啟動 explorer 時，繪製預設桌面與文字
+                let width = framebuffer.info().width as usize;
+                let height = framebuffer.info().height as usize;
+                let buffer = framebuffer.buffer_mut();
 
-        if keyboard_state.down {
-            mouse.y += 5;
-        }
-
-
-        if keyboard_state.left {
-            mouse.x -= 5;
-        }
-
-
-        if keyboard_state.right {
-            mouse.x += 5;
-        }
-
-        let moved =
-            oldx != mouse.x ||
-            oldy != mouse.y;
-
-        // 畫面
-
-        if is_explorer_running && let Some(framebuffer) = boot_info.framebuffer.as_mut()//避免原地閃
-        {
-
-            if let Some(event) = keyboard.process() {
-
-                explorer.update(event);
-
+                // 畫滑鼠游標
+                draw_cursor(buffer, width, mouse.x, mouse.y);
             }
-
-
-        } 
-
-        if moved && !is_explorer_running && let Some(framebuffer) = boot_info.framebuffer.as_mut()//避免原地閃
-        {
-            let width =
-                framebuffer.info().width as usize;
-
-
-            let height =
-                framebuffer.info().height as usize;
-
-
-            let buffer =
-                framebuffer.buffer_mut();
-
-
-            draw_rect(
-                buffer,
-                width,
-                (oldx - 2) as usize,
-                (oldy - 2) as usize,
-                5,
-                5,
-                [255,255,255],
-            );
-
-            draw_cursor(
-                buffer,
-                width,
-                mouse.x,
-                mouse.y,
-            );
         }
+
         x86_64::instructions::hlt();
     }
 }
