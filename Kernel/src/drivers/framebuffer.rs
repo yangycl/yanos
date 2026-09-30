@@ -182,6 +182,23 @@ pub fn draw_char(
             }        }
 
 
+            '!' => {
+                for row in 0..6 {
+                    draw_pixel(buffer, width, x + 3, y + row, color);
+                    draw_pixel(buffer, width, x + 4, y + row, color);
+                }
+                draw_pixel(buffer, width, x + 3, y + 7, color);
+                draw_pixel(buffer, width, x + 4, y + 7, color);
+            }
+
+
+            '_' => {
+                for col in 0..8 {
+                    draw_pixel(buffer, width, x + col, y + 7, color);
+                }
+            }
+
+
         _ => return,
 
     }
@@ -232,19 +249,44 @@ pub fn draw_string(
 pub fn draw_orange_screen(
     framebuffer: &mut bootloader_api::info::FrameBuffer,
 ) {
-    let width = framebuffer.info().width as usize;
-    let height = framebuffer.info().height as usize;
+    let info = framebuffer.info();
     let buffer = framebuffer.buffer_mut();
 
-    for y in 0..height {
-        for x in 0..width {
-            let index = (y * width + x) * 3;
+    for y in 0..info.height {
+        for x in 0..info.width {
+            let index = (y * info.stride + x) * info.bytes_per_pixel;
+            if index + info.bytes_per_pixel > buffer.len() {
+                continue;
+            }
 
-            if index + 2 < buffer.len() {
-                // BGR
-                buffer[index] = 0;
-                buffer[index + 1] = 140;
-                buffer[index + 2] = 255;
+            let pixel_format = info.pixel_format;
+            match pixel_format {
+                bootloader_api::info::PixelFormat::Rgb => {
+                    buffer[index] = 255;
+                    buffer[index + 1] = 140;
+                    buffer[index + 2] = 0;
+                }
+                bootloader_api::info::PixelFormat::Bgr => {
+                    buffer[index] = 0;
+                    buffer[index + 1] = 140;
+                    buffer[index + 2] = 255;
+                }
+                bootloader_api::info::PixelFormat::U8 => {
+                    buffer[index] = 160;
+                }
+                bootloader_api::info::PixelFormat::Unknown {
+                    red_position,
+                    green_position,
+                    blue_position,
+                } => {
+                    let pixel = 255u32.checked_shl(red_position as u32).unwrap_or(0)
+                        | 140u32.checked_shl(green_position as u32).unwrap_or(0)
+                        | 0u32.checked_shl(blue_position as u32).unwrap_or(0);
+                    for byte in 0..info.bytes_per_pixel.min(4) {
+                        buffer[index + byte] = (pixel >> (byte * 8)) as u8;
+                    }
+                }
+                _ => {}
             }
         }
     }

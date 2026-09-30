@@ -4,6 +4,7 @@ use spin::Mutex;
 use x86_64::structures::idt::{
     InterruptDescriptorTable,
     InterruptStackFrame,
+    PageFaultErrorCode,
 };
 
 use crate::pic::PICS;
@@ -26,6 +27,8 @@ lazy_static! {
         idt[33]
             .set_handler_fn(keyboard_handler);
 
+        idt.double_fault.set_handler_fn(double_fault_handle);
+        idt.page_fault.set_handler_fn(page_falut_handle);
 
 
         idt
@@ -223,4 +226,82 @@ pub fn push_usb_report(report: [u8; 8]) {
 /// keyboard.rs 使用
 pub fn get_usb_report() -> Option<[u8; 8]> {
     USB_REPORT_QUEUE.lock().pop()
+}
+
+extern "x86-interrupt" fn page_falut_handle(
+    _stack_frame: InterruptStackFrame,
+    _error_code: PageFaultErrorCode,
+) {
+    unsafe {
+        if let Some(framebuffer_ptr) = crate::FRAMEBUFFER {
+            let framebuffer = &mut *framebuffer_ptr;
+            crate::drivers::framebuffer::draw_orange_screen(framebuffer);
+            let width = framebuffer.info().width as usize;
+
+            let fault_addr = x86_64::registers::control::Cr2::read()
+                .unwrap_or(x86_64::VirtAddr::new(0));
+            let msg = alloc::format!("PF at 0x{:x}", fault_addr.as_u64());
+            crate::drivers::framebuffer::draw_string(
+                framebuffer.buffer_mut(),
+                width,
+                10,
+                10,
+                &msg,
+                [255, 0, 0],
+            );
+
+            let rip = _stack_frame.instruction_pointer.as_u64();
+            let rip_msg = alloc::format!("RIP 0x{:x}", rip);
+            crate::drivers::framebuffer::draw_string(
+                framebuffer.buffer_mut(),
+                width,
+                10,
+                30,
+                &rip_msg,
+                [255, 0, 0],
+            );
+        }
+    }
+
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
+
+extern "x86-interrupt" fn double_fault_handle(
+    _stack_frame: InterruptStackFrame,
+    _error_code: u64,
+) -> ! {
+    unsafe {
+        if let Some(framebuffer_ptr) = crate::FRAMEBUFFER {
+            let framebuffer = &mut *framebuffer_ptr;
+            crate::drivers::framebuffer::draw_orange_screen(framebuffer);
+            let width = framebuffer.info().width as usize;
+
+            let rip = _stack_frame.instruction_pointer.as_u64();
+            let msg = alloc::format!("DF RIP 0x{:x}", rip);
+            crate::drivers::framebuffer::draw_string(
+                framebuffer.buffer_mut(),
+                width,
+                10,
+                10,
+                &msg,
+                [255, 0, 0],
+            );
+
+            let err = alloc::format!("err=0x{:x}", _error_code);
+            crate::drivers::framebuffer::draw_string(
+                framebuffer.buffer_mut(),
+                width,
+                10,
+                30,
+                &err,
+                [255, 0, 0],
+            );
+        }
+    }
+
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
