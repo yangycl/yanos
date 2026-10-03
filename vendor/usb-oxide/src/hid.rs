@@ -777,26 +777,42 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
             break;
         }
 
-        match dtype {
-            desc_type::INTERFACE if len >= 9 => {
-                let iface = unsafe { *(config_data.as_ptr().add(offset) as *const InterfaceDesc) };
-                if iface.interface_class == class::HID {
-                    current_iface = Some(iface);
-                } else {
+        // Read fields by offset. The descriptor is packed and often unaligned.
+        if dtype == desc_type::INTERFACE && len >= 9 {
+            let iface = InterfaceDesc {
+                length: config_data[offset],
+                desc_type: config_data[offset + 1],
+                interface_number: config_data[offset + 2],
+                alternate_setting: config_data[offset + 3],
+                num_endpoints: config_data[offset + 4],
+                interface_class: config_data[offset + 5],
+                interface_subclass: config_data[offset + 6],
+                interface_protocol: config_data[offset + 7],
+                interface: config_data[offset + 8],
+            };
+            current_iface = if iface.interface_class == class::HID {
+                Some(iface)
+            } else {
+                None
+            };
+        } else if dtype == desc_type::ENDPOINT && len >= 7 {
+            if let Some(iface) = current_iface {
+                let ep = EndpointDesc {
+                    length: config_data[offset],
+                    desc_type: config_data[offset + 1],
+                    endpoint_address: config_data[offset + 2],
+                    attributes: config_data[offset + 3],
+                    max_packet_size: u16::from_le_bytes([
+                        config_data[offset + 4],
+                        config_data[offset + 5],
+                    ]),
+                    interval: config_data[offset + 6],
+                };
+                if ep.is_in() && ep.transfer_type() == ep_type::INTERRUPT {
+                    result.push((iface, ep));
                     current_iface = None;
                 }
             }
-            desc_type::ENDPOINT if len >= 7 => {
-                if let Some(iface) = current_iface {
-                    let ep = unsafe { *(config_data.as_ptr().add(offset) as *const EndpointDesc) };
-                    // Only interested in Interrupt IN endpoints
-                    if ep.is_in() && ep.transfer_type() == ep_type::INTERRUPT {
-                        result.push((iface, ep));
-                        current_iface = None;
-                    }
-                }
-            }
-            _ => {}
         }
 
         offset += len;
