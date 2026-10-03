@@ -7,7 +7,7 @@ use x86_64::structures::idt::{
     PageFaultErrorCode,
 };
 
-use crate::pic::PICS;
+use crate::arch::x86_64::pic::PICS;
 
 
 lazy_static! {
@@ -141,7 +141,7 @@ fn keyboard_handler(
 
     unsafe {
 
-        crate::pic::PICS
+        crate::arch::x86_64::pic::PICS
             .lock()
             .notify_end_of_interrupt(33);
 
@@ -154,7 +154,7 @@ extern "x86-interrupt" fn timer_handler(
 ) {
 
     unsafe {
-        crate::pic::PICS
+        crate::arch::x86_64::pic::PICS
             .lock()
             .notify_end_of_interrupt(32);
     }
