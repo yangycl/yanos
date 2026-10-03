@@ -258,9 +258,9 @@ impl<H: Dma> UsbDevice<H> {
             let data_trb = Trb {
                 param: buf.phys(host),
                 status: setup.length as u32,
+                // No IOC. Wait for the status stage so the data buffer is committed.
                 control: (trb_type::DATA << 10)
-                    | if data_dir { 1 << 16 } else { 0 } // DIR
-                    | (1 << 5), // IOC for debugging
+                    | if data_dir { 1 << 16 } else { 0 },
             };
             ep0_ring.enqueue(host, data_trb);
         }
@@ -280,7 +280,7 @@ impl<H: Dma> UsbDevice<H> {
         // Ring doorbell for EP0 (target = 1)
         self.ctrl.ring_doorbell(self.slot_id, 1);
 
-        // Wait for completion
+        // Wait for the status-stage event, then copy the whole IN buffer.
         loop {
             if let Some(evt) = self.ctrl.poll_event()
                 && evt.trb_type() == trb_type::TRANSFER_EVENT as u8
@@ -289,17 +289,14 @@ impl<H: Dma> UsbDevice<H> {
                 let code = evt.completion_code();
                 match code {
                     completion::SUCCESS | completion::SHORT_PACKET => {
-                        let transferred =
-                            (setup.length as usize).saturating_sub(evt.transfer_length() as usize);
+                        let transferred = setup.length as usize;
 
-                        // Copy data back for IN transfers
                         if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
+                            let n = transferred.min(d.len());
                             unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    buf.as_ptr::<u8>(),
-                                    d.as_mut_ptr(),
-                                    transferred.min(d.len()),
-                                );
+                                for i in 0..n {
+                                    d[i] = core::ptr::read_volatile(buf.as_ptr::<u8>().add(i));
+                                }
                             }
                         }
 

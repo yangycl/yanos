@@ -99,6 +99,7 @@ fn init_one(bar0: usize) -> bool {
         };
         saw_dev = true;
         note(alloc::format!("ADDR OK {port}"));
+        note(alloc::format!("SPD {}", dev.speed()));
 
         // 裝置描述子 / 設定
         let _ = dev.get_device_descriptor();
@@ -106,9 +107,16 @@ fn init_one(bar0: usize) -> bool {
             note(alloc::format!("CFG FAIL {port}"));
             continue;
         };
+        let b0 = config.first().copied().unwrap_or(0);
+        let b2 = config.get(2).copied().unwrap_or(0);
+        let b3 = config.get(3).copied().unwrap_or(0);
+        note(alloc::format!("CFG {} H {b0:02X} {b2:02X}{b3:02X}", config.len()));
+        if config.len() < 9 || b0 == 0 {
+            continue;
+        }
         saw_cfg = true;
         let cfg_val = config.get(5).copied().unwrap_or(0);
-        note(alloc::format!("CFG {} VAL {cfg_val}", config.len()));
+        note(alloc::format!("VAL {cfg_val}"));
         // 通常 bConfigurationValue 在 config[5]
         if config.len() > 5 {
             let set_ok = dev.set_configuration(config[5]).is_ok();
