@@ -272,7 +272,6 @@ impl<H: Dma> UsbDevice<H> {
                     status: chunk as u32,
                     control: (trb_type::DATA << 10)
                         | if data_dir { 1 << 16 } else { 0 }
-                        | (1 << 5)
                         | (1 << 2)
                         | if last { 0 } else { 1 << 4 }
                 };
@@ -296,11 +295,10 @@ impl<H: Dma> UsbDevice<H> {
         // Ring doorbell for EP0 (target = 1)
         self.ctrl.ring_doorbell(self.slot_id, 1);
 
-        // Data TRB and status TRB each have IOC. The first event is the data
-        // stage and carries the residual; status residual is always 0.
-        let mut saw_data = data_buf.is_none();
-        let mut saw_status = false;
-        let mut transferred = 0;
+        // Only the status TRB has IOC. Copy after that event; copying the
+        // first event was reading a buffer the device had not written yet.
+        let mut transferred = 0usize;
+        let mut done = false;
         for _ in 0..5_000_000 {
             if let Some(evt) = self.ctrl.poll_event()
                 && evt.trb_type() == trb_type::TRANSFER_EVENT as u8
@@ -309,24 +307,24 @@ impl<H: Dma> UsbDevice<H> {
                 let code = evt.completion_code();
                 match code {
                     completion::SUCCESS | completion::SHORT_PACKET => {
-                        if !saw_data {
-                            transferred = (setup.length as usize)
+                        transferred = if data_len == 0 {
+                            0
+                        } else {
+                            (setup.length as usize)
                                 .saturating_sub(evt.transfer_length() as usize)
-                                .min(data_len);
-                            if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
-                                unsafe {
-                                    for i in 0..transferred {
-                                        d[i] = core::ptr::read_volatile(buf.as_ptr::<u8>().add(i));
-                                    }
+                                .min(data_len)
+                        };
+                        if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
+                            unsafe {
+                                for i in 0..transferred {
+                                    d[i] = core::ptr::read_volatile(buf.as_ptr::<u8>().add(i));
                                 }
                             }
-                            saw_data = true;
-                            if evt.completion_code() == completion::SHORT_PACKET {
-                                saw_status = true;
+                            if transferred > 0 && d[..transferred].iter().all(|b| *b == 0) {
+                                transferred = 0;
                             }
-                            continue;
                         }
-                        saw_status = true;
+                        done = true;
                     }
                     completion::STALL_ERROR => {
                         if let Some(buf) = data_buf {
@@ -344,18 +342,18 @@ impl<H: Dma> UsbDevice<H> {
             } else {
                 spin_loop();
             }
-            if saw_data && saw_status {
+            if done {
                 if let Some(buf) = data_buf {
                     buf.free(host);
+                }
+                if data_len > 0 && transferred == 0 {
+                    return Err(UsbError::Timeout);
                 }
                 return Ok(transferred);
             }
         }
         if let Some(buf) = data_buf {
             buf.free(host);
-        }
-        if saw_data {
-            return Ok(transferred);
         }
         Err(UsbError::Timeout)
     }
