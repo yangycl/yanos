@@ -253,16 +253,31 @@ impl<H: Dma> UsbDevice<H> {
         };
         ep0_ring.enqueue(host, setup_trb);
 
-        // Data Stage TRB (if needed)
+        // Data stage, one TRB per EP0 packet. A single 254-byte TRB comes back
+        // as a 9-byte header on this controller, so the interface bytes stay zero.
+        let mps = match self.speed {
+            reg::SPEED_LOW | reg::SPEED_FULL => 8,
+            reg::SPEED_HIGH => 64,
+            reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => 512,
+            _ => 64,
+        };
         if let Some(ref buf) = data_buf {
-            let data_trb = Trb {
-                param: buf.phys(host),
-                status: setup.length as u32,
-                // No IOC. Wait for the status stage so the data buffer is committed.
-                control: (trb_type::DATA << 10)
-                    | if data_dir { 1 << 16 } else { 0 },
-            };
-            ep0_ring.enqueue(host, data_trb);
+            let mut left = (setup.length as usize).min(data_len);
+            let mut off = 0;
+            while left > 0 {
+                let chunk = left.min(mps);
+                left -= chunk;
+                let last = left == 0;
+                let data_trb = Trb {
+                    param: buf.phys(host) + off as u64,
+                    status: chunk as u32,
+                    control: (trb_type::DATA << 10)
+                        | if data_dir { 1 << 16 } else { 0 }
+                        | if last { (1 << 5) | (1 << 2) } else { 1 << 4 },
+                };
+                ep0_ring.enqueue(host, data_trb);
+                off += chunk;
+            }
         }
 
         // Status Stage TRB
@@ -280,7 +295,10 @@ impl<H: Dma> UsbDevice<H> {
         // Ring doorbell for EP0 (target = 1)
         self.ctrl.ring_doorbell(self.slot_id, 1);
 
-        // Wait for the status-stage event, then copy the whole IN buffer.
+        // Data TRB and status TRB each have IOC. The first event is the data
+        // stage and carries the residual; status residual is always 0.
+        let mut saw_data = data_buf.is_none();
+        let mut transferred = 0;
         loop {
             if let Some(evt) = self.ctrl.poll_event()
                 && evt.trb_type() == trb_type::TRANSFER_EVENT as u8
@@ -289,17 +307,20 @@ impl<H: Dma> UsbDevice<H> {
                 let code = evt.completion_code();
                 match code {
                     completion::SUCCESS | completion::SHORT_PACKET => {
-                        let transferred = setup.length as usize;
-
-                        if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
-                            let n = transferred.min(d.len());
-                            unsafe {
-                                for i in 0..n {
-                                    d[i] = core::ptr::read_volatile(buf.as_ptr::<u8>().add(i));
+                        if !saw_data {
+                            transferred = (setup.length as usize)
+                                .saturating_sub(evt.transfer_length() as usize)
+                                .min(data_len);
+                            if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
+                                unsafe {
+                                    for i in 0..transferred {
+                                        d[i] = core::ptr::read_volatile(buf.as_ptr::<u8>().add(i));
+                                    }
                                 }
                             }
+                            saw_data = true;
+                            continue;
                         }
-
                         if let Some(buf) = data_buf {
                             buf.free(host);
                         }
@@ -347,7 +368,8 @@ impl<H: Dma> UsbDevice<H> {
         // Now get the full descriptor
         let mut full_buf = alloc::vec![0u8; total_len];
         let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, total_len as u16);
-        self.control_transfer(&setup, Some(&mut full_buf))?;
+        let n = self.control_transfer(&setup, Some(&mut full_buf))?;
+        full_buf.truncate(n.min(total_len));
 
         Ok(full_buf)
     }
