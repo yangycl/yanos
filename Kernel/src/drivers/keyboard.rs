@@ -1,5 +1,5 @@
 //! Keyboard input: USB HID first, PS/2 fallback (QEMU / Legacy)
-use crate::interrupts;
+use crate::arch::x86_64::interrupts;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 static SHIFT_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -31,6 +31,9 @@ impl KeyboardDecoder {
     }
 
     pub fn process(&mut self) -> Option<KeyEvent> {
+        if let Some(ev) = usb_arrow_event() {
+            return Some(ev);
+        }
         let sc = interrupts::peek_key()?;
         if sc == 0xE0 {
             let _ = interrupts::get_key();
@@ -54,6 +57,22 @@ impl KeyboardDecoder {
             _ => None,
         }
     }
+}
+
+fn usb_arrow_event() -> Option<KeyEvent> {
+    let report = interrupts::get_usb_report()?;
+    let usage = report[2..8].iter().copied().find(|u| *u != 0).unwrap_or(0);
+    let ev = match usage {
+        0x52 => Some(KeyEvent::UpPress),
+        0x51 => Some(KeyEvent::DownPress),
+        0x50 => Some(KeyEvent::LeftPress),
+        0x4F => Some(KeyEvent::RightPress),
+        _ => None,
+    };
+    if ev.is_none() && usage != 0 {
+        interrupts::push_usb_report(report);
+    }
+    ev
 }
 
 pub struct KeyboardState {

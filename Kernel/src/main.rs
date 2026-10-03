@@ -137,7 +137,7 @@ fn kernel_main(
         left:false,
         right:false,
     };
-    let usb_ok = crate::drivers::usb_host::init();
+    // 上面 framebuffer 區塊已經 init 過。再叫一次會 HCRST，把剛找到的鍵盤清掉。
     let mut keyboard = KeyboardDecoder::new();
     let mut keyboard_state = KeyboardState::new();
     use crate::fs::fat32::Fat32;
@@ -185,7 +185,9 @@ fn kernel_main(
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
     loop {
-        crate::drivers::usb_host::poll();
+        for _ in 0..8 {
+            crate::drivers::usb_host::poll();
+        }
         while let Some(event) = keyboard.process() {
             keyboard_state.update(event);
             if is_explorer_running {
@@ -193,6 +195,14 @@ fn kernel_main(
             }
         }
         if let Some(ch) = drivers::keyboard::read_char() {
+            if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+                let width = framebuffer.info().width as usize;
+                let buffer = framebuffer.buffer_mut();
+                let shown = [ch as u8];
+                let label = core::str::from_utf8(&shown).unwrap_or("?");
+                draw_string(buffer, width, 10, 110, "KEY", [0, 0, 0]);
+                draw_string(buffer, width, 50, 110, label, [0, 0, 0]);
+            }
             match ch {
                 'q' => {
                     is_explorer_running = false;

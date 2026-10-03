@@ -30,7 +30,11 @@ pub fn init() -> bool {
 
     for port in 0..ctrl.max_ports() {
         if !ctrl.port_connected(port) {
-            // 可選：let _ = ctrl.reset_port(port);
+            continue;
+        }
+        // 真機 handoff 後裝置多半還在 Disabled，不 reset 就不會進 Addressed。
+        let _ = ctrl.reset_port(port);
+        if !ctrl.port_connected(port) {
             continue;
         }
 
