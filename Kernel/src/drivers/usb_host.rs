@@ -6,16 +6,24 @@ use usb_oxide::{
 
 use crate::drivers::dma::{MyDma, DMA_POOL};
 use crate::drivers::keyboard;
-use crate::drivers::pci::find_xhci_bar0;
+use crate::drivers::pci::find_xhci_bars;
 
 static KEYBOARD: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
+static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-/// 開機時呼叫一次：找 xHCI → 初始化 → 找鍵盤
+/// 開機時呼叫一次：每顆 xHCI 都試。接收器可能不在第一顆控制器。
 pub fn init() -> bool {
-    let Some(bar0) = find_xhci_bar0() else {
-        return false;
-    };
+    let mut bars = [0usize; 4];
+    let n = find_xhci_bars(&mut bars);
+    for bar0 in bars.into_iter().take(n) {
+        if init_one(bar0) {
+            return true;
+        }
+    }
+    false
+}
 
+fn init_one(bar0: usize) -> bool {
     let dma = unsafe {
         MyDma::new(DMA_POOL.0.as_ptr() as usize, DMA_POOL.0.len())
     };
@@ -73,6 +81,14 @@ pub fn init() -> bool {
 
 /// 主迴圈每圈呼叫：有鍵就推進 keyboard 佇列
 pub fn poll() {
+    if KEYBOARD.lock().is_none() {
+        let n = RETRY.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        // 接收器開機後才插上也要看得到。不要每一圈都 HCRST。
+        if n % 2000 == 0 {
+            let _ = init();
+        }
+        return;
+    }
     let guard = KEYBOARD.lock();
     let Some(hid) = guard.as_ref() else {
         return;
