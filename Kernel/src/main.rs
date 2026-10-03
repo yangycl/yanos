@@ -89,7 +89,9 @@ fn kernel_main(
 ) -> ! {
 
     pic::init();
+    pic::unmask_keyboard_and_timer();
     interrupts::init_idt();
+    drivers::keyboard::init_ps2();
     x86_64::instructions::interrupts::enable();
 
     unsafe {

@@ -22,3 +22,9 @@ pub fn init() {
         PICS.lock().initialize();
     }
 }
+/// IRQ0 timer、IRQ1 keyboard。initialize() 之後全部是罩住的。
+pub fn unmask_keyboard_and_timer() {
+    unsafe {
+        PICS.lock().write_masks(0xFC, 0xFF);
+    }
+}

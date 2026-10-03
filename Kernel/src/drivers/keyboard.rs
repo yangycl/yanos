@@ -440,3 +440,64 @@ pub fn push_keyboard_report(report: &KeyboardReport) {
     raw[2..8].copy_from_slice(&report.keys);
     interrupts::push_usb_report(raw);
 }
+/// 筆電內建鍵盤多半在 EC 的 i8042，不是 xHCI。
+/// 沒送 0xAE / 0xF4，IRQ1 不會響。
+pub fn init_ps2() {
+    let mut status = x86_64::instructions::port::Port::<u8>::new(0x64);
+    let mut data = x86_64::instructions::port::Port::<u8>::new(0x60);
+
+    fn wait_write(status: &mut x86_64::instructions::port::Port<u8>) -> bool {
+        for _ in 0..100_000 {
+            if unsafe { status.read() } & 0x02 == 0 {
+                return true;
+            }
+            core::hint::spin_loop();
+        }
+        false
+    }
+    fn wait_read(status: &mut x86_64::instructions::port::Port<u8>) -> bool {
+        for _ in 0..100_000 {
+            if unsafe { status.read() } & 0x01 != 0 {
+                return true;
+            }
+            core::hint::spin_loop();
+        }
+        false
+    }
+
+    if !wait_write(&mut status) {
+        return;
+    }
+    unsafe { status.write(0xAD) }; // disable keyboard port
+    if !wait_write(&mut status) {
+        return;
+    }
+    unsafe { status.write(0x20) }; // read config
+    if !wait_read(&mut status) {
+        return;
+    }
+    let mut cfg = unsafe { data.read() };
+    cfg |= 1 << 0; // keyboard interrupt
+    cfg |= 1 << 6; // scancode translation, set 2 -> set 1
+    cfg &= !(1 << 4); // enable first port clock
+    if !wait_write(&mut status) {
+        return;
+    }
+    unsafe { status.write(0x60) };
+    if !wait_write(&mut status) {
+        return;
+    }
+    unsafe { data.write(cfg) };
+    if !wait_write(&mut status) {
+        return;
+    }
+    unsafe { status.write(0xAE) }; // enable keyboard port
+    if !wait_write(&mut status) {
+        return;
+    }
+    unsafe { data.write(0xF4) }; // enable scanning
+    let _ = wait_read(&mut status);
+    if unsafe { status.read() } & 0x01 != 0 {
+        let _ = unsafe { data.read() }; // ACK
+    }
+}
