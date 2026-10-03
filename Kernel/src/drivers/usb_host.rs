@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use spin::Mutex;
 use usb_oxide::{
-    find_hid_interfaces, HidDevice, HidType, UsbDevice, XhciCtrl,
+    find_hid_interfaces, HidDevice, HidType, UsbDevice, UsbError, XhciCtrl,
 };
 
 use crate::drivers::dma::{MyDma, DMA_POOL};
@@ -90,9 +90,12 @@ fn init_one(bar0: usize) -> bool {
             continue;
         }
 
-        let Ok(mut dev) = UsbDevice::new(ctrl.clone(), port) else {
-            note(alloc::format!("ADDR FAIL {port}"));
-            continue;
+        let mut dev = match UsbDevice::new(ctrl.clone(), port) {
+            Ok(dev) => dev,
+            Err(err) => {
+                note(alloc::format!("ADDR {port} {}", err_name(err)));
+                continue;
+            }
         };
         saw_dev = true;
         note(alloc::format!("ADDR OK {port}"));
@@ -139,7 +142,7 @@ fn init_one(bar0: usize) -> bool {
             return true;
         }
     }
-    *STATUS.lock() = if !saw_port {
+    let status = if !saw_port {
         "NO PORT"
     } else if !saw_dev {
         "ADDR FAIL"
@@ -150,7 +153,28 @@ fn init_one(bar0: usize) -> bool {
     } else {
         "MOUSE ONLY"
     };
+    // 後面的空控制器不要把前面的 ADDR FAIL 蓋成 NO PORT。
+    if saw_port || *STATUS.lock() == "NO CTRL" || *STATUS.lock() == "NO PORT" {
+        *STATUS.lock() = status;
+    }
     false
+}
+
+fn err_name(err: UsbError) -> alloc::string::String {
+    match err {
+        UsbError::Timeout => alloc::string::String::from("TIMEOUT"),
+        UsbError::OoRam => alloc::string::String::from("OORAM"),
+        UsbError::MapFail => alloc::string::String::from("MAP"),
+        UsbError::InvSlot => alloc::string::String::from("SLOT"),
+        UsbError::InvPort => alloc::string::String::from("PORT"),
+        UsbError::InvEndpoint => alloc::string::String::from("EP"),
+        UsbError::CmdFail(code) => alloc::format!("CMD {code}"),
+        UsbError::XferFail(code) => alloc::format!("XFER {code}"),
+        UsbError::DeviceNotFound => alloc::string::String::from("NODEV"),
+        UsbError::NotSupported => alloc::string::String::from("NOSUP"),
+        UsbError::InvalidDescriptor => alloc::string::String::from("DESC"),
+        UsbError::Stall => alloc::string::String::from("STALL"),
+    }
 }
 
 /// 主迴圈每圈呼叫：有鍵就推進 keyboard 佇列
