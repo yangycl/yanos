@@ -6,7 +6,7 @@ use usb_oxide::{
 
 use crate::drivers::dma::{MyDma, DMA_POOL};
 use crate::drivers::keyboard;
-use crate::drivers::pci::find_xhci_bars;
+use crate::usb::pci::find_xhci_bars;
 
 static KEYBOARD: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
 static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);

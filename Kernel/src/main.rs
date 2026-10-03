@@ -35,7 +35,7 @@ use drivers::framebuffer::{
     draw_char,
     draw_orange_screen,
 };
-use crate::drivers::pci::find_xhci_bar0;
+use crate::usb::pci::find_xhci_bar0;
 
 
 use crate::fs::directory::DirectoryEntry;
@@ -44,6 +44,7 @@ use crate::fs::file_location::FileLocation;
 use linked_list_allocator::LockedHeap;
 
 mod explorer;
+mod usb;
 mod memory;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
@@ -114,7 +115,7 @@ fn kernel_main(
         draw_rect(buffer, width, 0, 0, width, height, [255,255,255]);
         draw_string(buffer, width, 10, 10, "YANOS BOOT", [0, 0, 0]);
         draw_string(buffer, width, 10, 30, "PCI SCAN...", [0, 0, 0]);
-        let xhci_bar = crate::drivers::pci::find_xhci_bar0();
+        let xhci_bar = crate::usb::pci::find_xhci_bar0();
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
         match xhci_bar {
@@ -122,11 +123,11 @@ fn kernel_main(
             None => draw_string(buffer, width, 10, 50, "NO XHCI", [0, 0, 0]),
         }
         draw_string(buffer, width, 10, 70, "USB INIT...", [0, 0, 0]);
-        let usb_ok = crate::drivers::usb_host::init();
+        let usb_ok = crate::usb::init();
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
-        draw_string(buffer, width, 10, 90, crate::drivers::usb_host::status(), [0, 0, 0]);
-        for (i, line) in crate::drivers::usb_host::log_lines().iter().enumerate() {
+        draw_string(buffer, width, 10, 90, crate::usb::status(), [0, 0, 0]);
+        for (i, line) in crate::usb::log_lines().iter().enumerate() {
             draw_string(buffer, width, 10, 110 + i * 10, line, [0, 0, 0]);
         }
         let _ = usb_ok;
@@ -188,7 +189,7 @@ fn kernel_main(
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
     loop {
         for _ in 0..8 {
-            crate::drivers::usb_host::poll();
+            crate::usb::poll();
         }
         while let Some(event) = keyboard.process() {
             keyboard_state.update(event);
