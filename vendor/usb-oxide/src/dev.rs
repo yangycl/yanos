@@ -374,15 +374,32 @@ impl<H: Dma> UsbDevice<H> {
 
     /// Get configuration descriptor (full, with interfaces and endpoints)
     pub fn get_config_descriptor(&self, index: u8) -> Result<Vec<u8>> {
-        // First, get just the config descriptor to find total length
+        // Full-speed devices often NAK the first GET_DESCRIPTOR. Retry until
+        // the 9-byte header is real; a zero header is not an empty config.
         let mut buf = [0u8; 9];
-        let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, 9);
-        self.control_transfer(&setup, Some(&mut buf))?;
+        let mut got = false;
+        for _ in 0..4 {
+            buf = [0u8; 9];
+            let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, 9);
+            let n = self.control_transfer(&setup, Some(&mut buf))?;
+            if n >= 9 && buf[0] == 9 && buf[1] == 2 {
+                got = true;
+                break;
+            }
+            for _ in 0..2_000_000 {
+                spin_loop();
+            }
+        }
+        if !got {
+            return Err(UsbError::InvalidDescriptor);
+        }
 
         let config = unsafe { *(buf.as_ptr() as *const ConfigDesc) };
         let total_len = config.total_length as usize;
+        if total_len < 9 || total_len > 1024 {
+            return Err(UsbError::InvalidDescriptor);
+        }
 
-        // Now get the full descriptor
         let mut full_buf = alloc::vec![0u8; total_len];
         let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, total_len as u16);
         let n = self.control_transfer(&setup, Some(&mut full_buf))?;
