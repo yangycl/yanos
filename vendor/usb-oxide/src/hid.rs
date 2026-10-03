@@ -17,7 +17,7 @@ use crate::{
         hid_subclass,
     },
     dev::UsbDevice,
-    ring::PhysMem,
+    ring::{PhysMem, Trb},
 };
 
 use alloc::sync::Arc;
@@ -584,6 +584,7 @@ impl<H: Dma> HidDevice<H> {
         Ok(hid)
     }
 
+    /// xHCI slot assigned to this device.
     pub fn slot_id(&self) -> u8 {
         self.device.slot_id()
     }
@@ -593,16 +594,19 @@ impl<H: Dma> HidDevice<H> {
         self.ep_in * 2 + 1
     }
 
+    /// Dequeue one event from this device's controller.
     pub fn poll_event(&self) -> Option<Trb> {
         self.device.ctrl().poll_event()
     }
 
+    /// Copy the queued keyboard report and arm the next IN.
     pub fn take_keyboard(&self) -> KeyboardReport {
         let report = unsafe { core::ptr::read_volatile(self.report_buf.as_ptr::<KeyboardReport>()) };
         let _ = self.queue_read();
         report
     }
 
+    /// Copy the queued mouse report and arm the next IN.
     pub fn take_mouse(&self) -> MouseReport {
         let report = unsafe { core::ptr::read_volatile(self.report_buf.as_ptr::<MouseReport>()) };
         let _ = self.queue_read();
