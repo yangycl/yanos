@@ -1,7 +1,8 @@
 use alloc::sync::Arc;
 use spin::Mutex;
 use usb_oxide::{
-    find_hid_interfaces, HidDevice, HidType, MscDevice, UsbDevice, UsbError, XhciCtrl,
+    find_hid_interfaces, HidDevice, HidType, MscDevice, Trb, UsbDevice, UsbError, XhciCtrl,
+    trb_type,
 };
 
 use crate::dma::{MyDma, DMA_POOL};
@@ -318,16 +319,47 @@ pub fn poll() {
         }
         return;
     }
+    // 鍵盤和滑鼠共用同一條 event ring。先出環再依 slot+DCI 分，
+    // 不能讓 poll_keyboard 把滑鼠的完成事件吃掉。
+    let mut evts = [Trb::default(); 8];
+    let mut n = 0;
     if let Some(hid) = KEYBOARD.lock().as_ref() {
-        if let Some(report) = hid.poll_keyboard() {
-            keyboard::push_keyboard_report(&report);
+        while n < evts.len() {
+            let Some(evt) = hid.poll_event() else { break };
+            evts[n] = evt;
+            n += 1;
         }
     }
     if let Some(hid) = MOUSE.lock().as_ref() {
-        if let Some(report) = hid.poll_mouse() {
-            *MOUSE_DX.lock() += report.x as i32;
-            *MOUSE_DY.lock() += report.y as i32;
-            *MOUSE_BTN.lock() = report.buttons;
+        while n < evts.len() {
+            let Some(evt) = hid.poll_event() else { break };
+            evts[n] = evt;
+            n += 1;
+        }
+    }
+    for evt in evts.iter().take(n) {
+        if evt.trb_type() != trb_type::TRANSFER_EVENT as u8 {
+            continue;
+        }
+        let code = evt.completion_code();
+        if code != 1 && code != 13 {
+            continue;
+        }
+        let slot = evt.slot_id();
+        let ep = evt.endpoint_id();
+        if let Some(hid) = KEYBOARD.lock().as_ref() {
+            if hid.slot_id() == slot && hid.in_dci() == ep {
+                keyboard::push_keyboard_report(&hid.take_keyboard());
+                continue;
+            }
+        }
+        if let Some(hid) = MOUSE.lock().as_ref() {
+            if hid.slot_id() == slot && hid.in_dci() == ep {
+                let report = hid.take_mouse();
+                *MOUSE_DX.lock() += report.x as i32;
+                *MOUSE_DY.lock() += report.y as i32;
+                *MOUSE_BTN.lock() = report.buttons;
+            }
         }
     }
 }

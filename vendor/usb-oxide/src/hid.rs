@@ -584,6 +584,31 @@ impl<H: Dma> HidDevice<H> {
         Ok(hid)
     }
 
+    pub fn slot_id(&self) -> u8 {
+        self.device.slot_id()
+    }
+
+    /// Transfer event 的 endpoint id 是 DCI，IN 端點是 `ep * 2 + 1`。
+    pub fn in_dci(&self) -> u8 {
+        self.ep_in * 2 + 1
+    }
+
+    pub fn poll_event(&self) -> Option<Trb> {
+        self.device.ctrl().poll_event()
+    }
+
+    pub fn take_keyboard(&self) -> KeyboardReport {
+        let report = unsafe { core::ptr::read_volatile(self.report_buf.as_ptr::<KeyboardReport>()) };
+        let _ = self.queue_read();
+        report
+    }
+
+    pub fn take_mouse(&self) -> MouseReport {
+        let report = unsafe { core::ptr::read_volatile(self.report_buf.as_ptr::<MouseReport>()) };
+        let _ = self.queue_read();
+        report
+    }
+
     /// Set HID protocol (0 = Boot, 1 = Report)
     pub fn set_protocol(&self, protocol: u8) -> Result<()> {
         let setup = SetupPacket::set_protocol(self.interface, protocol);
