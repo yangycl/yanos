@@ -143,23 +143,19 @@ impl<H: Dma> UsbDevice<H> {
             return Err(UsbError::InvPort);
         }
 
-        // Allocate contexts
-        let device_ctx = PhysMem::alloc(
-            host,
-            core::mem::size_of::<DeviceContext>(),
-            core::mem::align_of::<DeviceContext>(),
-        )?;
-        let input_ctx = PhysMem::alloc(
-            host,
-            core::mem::size_of::<InputContext>(),
-            core::mem::align_of::<InputContext>(),
-        )?;
+        // CSZ = 0 is 32 bytes per context. A 64-byte layout is a parameter error.
+        let ctx = ctrl.context_size();
+        let device_ctx = PhysMem::alloc(host, ctx * 32, 64)?;
+        let input_ctx = PhysMem::alloc(host, ctx * 33, 64)?;
+        unsafe {
+            core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, ctx * 32);
+            core::ptr::write_bytes(input_ctx.as_ptr::<u8>(), 0, ctx * 33);
+        }
 
         // Allocate EP0 transfer ring
         let ep0_ring = Ring::new(host, 256)?;
 
         // Setup Input Context
-        let input = input_ctx.as_ptr::<InputContext>();
         let max_packet = match speed {
             reg::SPEED_LOW => 8,
             reg::SPEED_FULL => 8,
@@ -167,21 +163,12 @@ impl<H: Dma> UsbDevice<H> {
             reg::SPEED_SUPER => 512,
             _ => 8,
         };
+        let slot = SlotContext::new(0, speed, 1, port + 1);
+        let ep0 = EndpointContext::new(4, max_packet, 0, 0, ep0_ring.phys(host));
         unsafe {
-            // Add flags: Slot Context (bit 0) + EP0 Context (bit 1)
-            (*input).input_control[1] = 0b11;
-
-            // Slot Context
-            (*input).slot = SlotContext::new(0, speed, 1, port + 1);
-
-            // EP0 Context (Control endpoint)
-            (*input).endpoints[0] = EndpointContext::new(
-                4, // Control Bidirectional
-                max_packet,
-                0,
-                0,
-                ep0_ring.phys(host),
-            );
+            write_input_control(input_ctx.as_ptr::<u8>(), ctx, 0b11);
+            write_context(input_ctx.as_ptr::<u8>(), ctx, 1, &slot as *const _ as *const u8, 16);
+            write_context(input_ctx.as_ptr::<u8>(), ctx, 2, &ep0 as *const _ as *const u8, 20);
         }
 
         // Set device context in DCBAA
@@ -393,12 +380,15 @@ impl<H: Dma> UsbDevice<H> {
             return Ok(mps);
         }
         let host = self.ctrl.host();
-        let input = self.input_ctx.as_ptr::<InputContext>();
+        let ctx = self.ctrl.context_size();
         unsafe {
-            (*input).input_control[0] = 0;
-            (*input).input_control[1] = 1 << 1;
-            (*input).endpoints[0].dw1 = ((*input).endpoints[0].dw1 & 0x0000_ffff)
-                | ((mps as u32) << 16);
+            write_input_control(self.input_ctx.as_ptr::<u8>(), ctx, 1 << 1);
+            let ep0 = self.input_ctx.as_ptr::<u8>().add(2 * ctx);
+            let dw1 = core::ptr::read_volatile(ep0.add(4) as *const u32);
+            core::ptr::write_volatile(
+                ep0.add(4) as *mut u32,
+                (dw1 & 0x0000_ffff) | ((mps as u32) << 16),
+            );
         }
         let trb = Trb {
             param: self.input_ctx.phys(host),
@@ -483,11 +473,10 @@ impl<H: Dma> UsbDevice<H> {
         let ring = Ring::new(host, 256)?;
         let ring_phys = ring.phys(host);
 
-        // Update input context
-        let input = self.input_ctx.as_ptr::<InputContext>();
+        // Update input context. DCI n lives at input context index n + 1.
+        let ctx = self.ctrl.context_size();
         unsafe {
-            (*input).input_control[0] = 0; // Drop flags
-            (*input).input_control[1] = (1 << dci) | 1; // Add flags: this EP + Slot
+            write_input_control(self.input_ctx.as_ptr::<u8>(), ctx, (1 << dci) | 1);
 
             // xHCI endpoint type encoding
             let xhci_ep_type = match (ep_type, is_in) {
@@ -516,8 +505,15 @@ impl<H: Dma> UsbDevice<H> {
                 log2_ceil + 3
             };
 
-            (*input).endpoints[ring_idx] =
+            let ep_ctx =
                 EndpointContext::new(xhci_ep_type, ep.max_packet_size, 0, interval, ring_phys);
+            write_context(
+                self.input_ctx.as_ptr::<u8>(),
+                ctx,
+                dci + 1,
+                &ep_ctx as *const _ as *const u8,
+                20,
+            );
         }
 
         // Store ring
@@ -588,6 +584,22 @@ impl<H: Dma> UsbDevice<H> {
     /// Returns a reference to the xHCI controller.
     pub fn ctrl(&self) -> &Arc<XhciCtrl<H>> {
         &self.ctrl
+    }
+}
+
+fn write_input_control(buf: *mut u8, ctx: usize, add: u32) {
+    unsafe {
+        core::ptr::write_bytes(buf, 0, ctx);
+        core::ptr::write_volatile(buf as *mut u32, 0);
+        core::ptr::write_volatile(buf.add(4) as *mut u32, add);
+    }
+}
+
+fn write_context(buf: *mut u8, ctx: usize, index: usize, src: *const u8, len: usize) {
+    unsafe {
+        let dst = buf.add(index * ctx);
+        core::ptr::write_bytes(dst, 0, ctx);
+        core::ptr::copy_nonoverlapping(src, dst, len);
     }
 }
 

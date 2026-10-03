@@ -74,6 +74,7 @@ fn init_one(bar0: usize) -> bool {
         }
     };
     note(alloc::format!("PORTS {}", ctrl.max_ports()));
+    note(alloc::format!("CTX {}", ctrl.context_size()));
     // Reset 後 USB2 裝置要一段時間才把 CCS 拉起來。
     for _ in 0..20 {
         if (0..ctrl.max_ports()).any(|port| ctrl.port_connected(port)) {

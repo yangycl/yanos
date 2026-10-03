@@ -21,6 +21,7 @@ pub struct XhciCtrl<H: Dma> {
     db_offset: u32,
     max_slots: u8,
     max_ports: u8,
+    context_size: u8,
     dcbaa: PhysMem<H>,
     scratchpad: Option<PhysMem<H>>,
     cmd_ring: Mutex<Box<Ring<H>>>,
@@ -46,6 +47,10 @@ impl<H: Dma> XhciCtrl<H> {
 
         let max_slots = (hcs1 & 0xff) as u8;
         let max_ports = ((hcs1 >> 24) & 0xff) as u8;
+        let hcc1: u32 = unsafe { ((init_mmio + reg::HCCPARAMS1) as *const u32).read_volatile() };
+        // CSZ = 1 means 64-byte contexts. CSZ = 0 and a 64-byte input context
+        // makes Address Device return completion code 17.
+        let context_size: u8 = if hcc1 & (1 << 2) != 0 { 64 } else { 32 };
         let max_scratchpad = ((hcs2 >> 27) & 0x1f) | (((hcs2 >> 21) & 0x1f) << 5);
 
         // Calculate total MMIO size needed
@@ -113,6 +118,7 @@ impl<H: Dma> XhciCtrl<H> {
             db_offset,
             max_slots,
             max_ports,
+            context_size,
             dcbaa,
             scratchpad,
             cmd_ring: Mutex::new(cmd_ring),
@@ -364,6 +370,11 @@ impl<H: Dma> XhciCtrl<H> {
     /// Get max ports
     pub fn max_ports(&self) -> u8 {
         self.max_ports
+    }
+
+    /// Context size in bytes from HCCPARAMS1.CSZ. 32 or 64.
+    pub fn context_size(&self) -> usize {
+        self.context_size as usize
     }
 }
 
