@@ -112,23 +112,23 @@ fn kernel_main(
         let height = framebuffer.info().height as usize;
         let buffer = framebuffer.buffer_mut();
         draw_rect(buffer, width, 0, 0, width, height, [255,255,255]);
-        draw_string(buffer, width, 10, 10, "YANOS BOOT", [255, 255, 255]);
-        draw_string(buffer, width, 10, 30, "PCI SCAN...", [255, 255, 255]);
+        draw_string(buffer, width, 10, 10, "YANOS BOOT", [0, 0, 0]);
+        draw_string(buffer, width, 10, 30, "PCI SCAN...", [0, 0, 0]);
         let xhci_bar = crate::drivers::pci::find_xhci_bar0();
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
         match xhci_bar {
-            Some(_) => draw_string(buffer, width, 10, 50, "XHCI OK", [255, 255, 255]),
-            None => draw_string(buffer, width, 10, 50, "NO XHCI", [255, 255, 255]),
+            Some(_) => draw_string(buffer, width, 10, 50, "XHCI OK", [0, 0, 0]),
+            None => draw_string(buffer, width, 10, 50, "NO XHCI", [0, 0, 0]),
         }
-        draw_string(buffer, width, 10, 70, "USB INIT...", [255, 255, 255]);
+        draw_string(buffer, width, 10, 70, "USB INIT...", [0, 0, 0]);
         let usb_ok = crate::drivers::usb_host::init();
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
         if usb_ok {
-            draw_string(buffer, width, 10, 90, "HID KBD OK", [255, 255, 255]);
+            draw_string(buffer, width, 10, 90, "HID KBD OK", [0, 0, 0]);
         } else {
-            draw_string(buffer, width, 10, 90, "NO HID", [255, 255, 255]);
+            draw_string(buffer, width, 10, 90, "NO HID", [0, 0, 0]);
         }
     }
     let mut mouse = Mouse{
