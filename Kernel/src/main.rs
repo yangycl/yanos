@@ -224,14 +224,17 @@ fn kernel_main(
             }
         }
         if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+            desktop.draw(framebuffer);
             if is_explorer_running {
-                explorer.draw(framebuffer, &mut fat32);
-            } else {
-                desktop.draw(framebuffer);
                 let width = framebuffer.info().width as usize;
-                let buffer = framebuffer.buffer_mut();
-                draw_cursor(buffer, width, mouse.x, mouse.y);
+                let height = framebuffer.info().height as usize;
+                let win_w = 420.min(width.saturating_sub(80));
+                let win_h = 360.min(height.saturating_sub(80));
+                explorer.draw_window(framebuffer, &mut fat32, 40, 80, win_w, win_h);
             }
+            let width = framebuffer.info().width as usize;
+            let buffer = framebuffer.buffer_mut();
+            draw_cursor(buffer, width, mouse.x, mouse.y);
         }
         x86_64::instructions::hlt();
     }

@@ -63,91 +63,29 @@ impl Explorer {
     ) {
         let width = framebuffer.info().width as usize;
         let height = framebuffer.info().height as usize;
+        self.draw_window(framebuffer, fat32, 0, 0, width, height);
+    }
 
+    /// 只畫一塊視窗，不蓋掉桌面。
+    pub fn draw_window<D: BlockDevice>(
+        &self,
+        framebuffer: &mut FrameBuffer,
+        fat32: &mut Fat32<D>,
+        x0: usize,
+        y0: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
+        let stride = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
 
-        // ==========================
-        // Background
-        // ==========================
-
-        fb::draw_rect(
-            buffer,
-            width,
-            0,
-            0,
-            width,
-            height,
-            [35, 35, 35],
-        );
-
-        // ==========================
-        // Title
-        // ==========================
-
-        fb::draw_rect(
-            buffer,
-            width,
-            0,
-            0,
-            width,
-            32,
-            [45, 90, 255],
-        );
-
-        fb::draw_string(
-            buffer,
-            width,
-            10,
-            8,
-            "YASYS Explorer",
-            [255, 255, 255],
-        );
-
-        // ==========================
-        // Path
-        // ==========================
-
-        fb::draw_rect(
-            buffer,
-            width,
-            0,
-            32,
-            width,
-            24,
-            [55, 55, 55],
-        );
-
-        fb::draw_string(
-            buffer,
-            width,
-            10,
-            38,
-            "Path: /",
-            [255, 255, 255],
-        );
-
-        // ==========================
-        // Header
-        // ==========================
-
-        fb::draw_rect(
-            buffer,
-            width,
-            0,
-            56,
-            width,
-            24,
-            [70, 70, 70],
-        );
-
-        fb::draw_string(
-            buffer,
-            width,
-            10,
-            62,
-            "Name",
-            [255, 255, 255],
-        );
+        fb::draw_rect(buffer, stride, x0, y0, win_w, win_h, [35, 35, 35]);
+        fb::draw_rect(buffer, stride, x0, y0, win_w, 32, [45, 90, 255]);
+        fb::draw_string(buffer, stride, x0 + 10, y0 + 8, "YASYS Explorer", [255, 255, 255]);
+        fb::draw_rect(buffer, stride, x0, y0 + 32, win_w, 24, [55, 55, 55]);
+        fb::draw_string(buffer, stride, x0 + 10, y0 + 38, "Path: /home/desktop", [255, 255, 255]);
+        fb::draw_rect(buffer, stride, x0, y0 + 56, win_w, 24, [70, 70, 70]);
+        fb::draw_string(buffer, stride, x0 + 10, y0 + 62, "Name", [255, 255, 255]);
 
         // ==========================
         // Read directory
@@ -221,71 +159,40 @@ impl Explorer {
         // Draw file list
         // ==========================
 
-        let mut y = 90usize;
+        let mut y = y0 + 90;
 
         for (i, file) in names.iter().enumerate() {
-            if y + 20 >= height.saturating_sub(24) {
+            if y + 20 >= y0 + win_h.saturating_sub(24) {
                 break;
             }
 
             if i == self.selected {
-                fb::draw_rect(
-                    buffer,
-                    width,
-                    0,
-                    y - 2,
-                    width,
-                    18,
-                    [70, 120, 255],
-                );
+                fb::draw_rect(buffer, stride, x0, y - 2, win_w, 18, [70, 120, 255]);
             }
 
-            fb::draw_string(
-                buffer,
-                width,
-                10,
-                y,
-                file.as_str(),
-                [255, 255, 255],
-            );
+            fb::draw_string(buffer, stride, x0 + 10, y, file.as_str(), [255, 255, 255]);
 
             y += 20;
         }
 
-        // ==========================
-        // Empty directory
-        // ==========================
-
         if names.is_empty() {
-            fb::draw_string(
-                buffer,
-                width,
-                10,
-                90,
-                "(empty)",
-                [180, 180, 180],
-            );
+            fb::draw_string(buffer, stride, x0 + 10, y0 + 90, "(empty)", [180, 180, 180]);
         }
-
-        // ==========================
-        // Status bar
-        // ==========================
 
         fb::draw_rect(
             buffer,
-            width,
-            0,
-            height.saturating_sub(24),
-            width,
+            stride,
+            x0,
+            y0 + win_h.saturating_sub(24),
+            win_w,
             24,
             [55, 55, 55],
         );
-
         fb::draw_string(
             buffer,
-            width,
-            10,
-            height.saturating_sub(18),
+            stride,
+            x0 + 10,
+            y0 + win_h.saturating_sub(18),
             "Explorer",
             [255, 255, 255],
         );
