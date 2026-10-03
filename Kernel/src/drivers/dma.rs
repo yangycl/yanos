@@ -39,14 +39,14 @@ impl Dma for MyDma {
 
     unsafe fn free(&self, _addr: usize, _size: usize, _align: usize) {}
 
-    unsafe fn map_mmio(&self, phys: usize, _size: usize) -> Option<usize> {
-        Some(phys)
+    unsafe fn map_mmio(&self, phys: usize, size: usize) -> Option<usize> {
+        crate::memory::paging::map_mmio(phys as u64, size).map(|v| v as usize)
     }
 
     unsafe fn unmap_mmio(&self, _virt: usize, _size: usize) {}
 
     fn virt_to_phys(&self, va: usize) -> usize {
-        va
+        crate::memory::paging::virt_to_phys(va as u64) as usize
     }
 
     fn page_size(&self) -> usize {
