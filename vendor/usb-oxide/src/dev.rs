@@ -119,6 +119,7 @@ pub struct UsbDevice<H: Dma> {
     slot_id: u8,
     port: u8,
     speed: u8,
+    ep0_mps: u16,
     device_ctx: PhysMem<H>,
     input_ctx: PhysMem<H>,
     ep0_ring: Mutex<Ring<H>>,
@@ -158,6 +159,13 @@ impl<H: Dma> UsbDevice<H> {
 
         // Setup Input Context
         let input = input_ctx.as_ptr::<InputContext>();
+        let max_packet = match speed {
+            reg::SPEED_LOW => 8,
+            reg::SPEED_FULL => 8,
+            reg::SPEED_HIGH => 64,
+            reg::SPEED_SUPER => 512,
+            _ => 8,
+        };
         unsafe {
             // Add flags: Slot Context (bit 0) + EP0 Context (bit 1)
             (*input).input_control[1] = 0b11;
@@ -166,13 +174,6 @@ impl<H: Dma> UsbDevice<H> {
             (*input).slot = SlotContext::new(0, speed, 1, port + 1);
 
             // EP0 Context (Control endpoint)
-            let max_packet = match speed {
-                reg::SPEED_LOW => 8,
-                reg::SPEED_FULL => 8,
-                reg::SPEED_HIGH => 64,
-                reg::SPEED_SUPER => 512,
-                _ => 8,
-            };
             (*input).endpoints[0] = EndpointContext::new(
                 4, // Control Bidirectional
                 max_packet,
@@ -202,6 +203,7 @@ impl<H: Dma> UsbDevice<H> {
             slot_id,
             port,
             speed,
+            ep0_mps: max_packet,
             device_ctx,
             input_ctx,
             ep0_ring: Mutex::new(ep0_ring),
@@ -255,12 +257,7 @@ impl<H: Dma> UsbDevice<H> {
 
         // Data stage, one TRB per EP0 packet. A single 254-byte TRB comes back
         // as a 9-byte header on this controller, so the interface bytes stay zero.
-        let mps = match self.speed {
-            reg::SPEED_LOW | reg::SPEED_FULL => 8,
-            reg::SPEED_HIGH => 64,
-            reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => 512,
-            _ => 64,
-        };
+        let mps = self.ep0_mps as usize;
         if let Some(ref buf) = data_buf {
             let mut left = (setup.length as usize).min(data_len);
             let mut off = 0;
@@ -359,6 +356,43 @@ impl<H: Dma> UsbDevice<H> {
             return Ok(transferred);
         }
         Err(UsbError::Timeout)
+    }
+
+    /// Full-speed EP0 may be 8, 16, 32, or 64. Read the first 8 bytes of the
+    /// device descriptor and evaluate the context before any larger transfer.
+    pub fn sync_ep0_packet(&mut self) -> Result<u16> {
+        if self.speed != reg::SPEED_FULL && self.speed != reg::SPEED_LOW {
+            return Ok(self.ep0_mps);
+        }
+        let mut buf = [0u8; 8];
+        let setup = SetupPacket::get_descriptor(desc_type::DEVICE, 0, 8);
+        let n = self.control_transfer(&setup, Some(&mut buf))?;
+        if n < 8 || buf[0] < 8 || buf[1] != 1 {
+            return Ok(self.ep0_mps);
+        }
+        let mps = buf[7] as u16;
+        if mps != 8 && mps != 16 && mps != 32 && mps != 64 {
+            return Ok(self.ep0_mps);
+        }
+        if mps == self.ep0_mps {
+            return Ok(mps);
+        }
+        let host = self.ctrl.host();
+        let input = self.input_ctx.as_ptr::<InputContext>();
+        unsafe {
+            (*input).input_control[0] = 0;
+            (*input).input_control[1] = 1 << 1;
+            (*input).endpoints[0].dw1 = ((*input).endpoints[0].dw1 & 0x0000_ffff)
+                | ((mps as u32) << 16);
+        }
+        let trb = Trb {
+            param: self.input_ctx.phys(host),
+            status: 0,
+            control: (trb_type::EVALUATE_CONTEXT << 10) | ((self.slot_id as u32) << 24),
+        };
+        self.ctrl.submit_command(trb)?;
+        self.ep0_mps = mps;
+        Ok(mps)
     }
 
     /// Get device descriptor

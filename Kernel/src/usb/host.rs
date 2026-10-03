@@ -109,6 +109,10 @@ fn init_one(bar0: usize) -> bool {
         saw_dev = true;
         note(alloc::format!("ADDR OK {port}"));
         note(alloc::format!("SPD {}", dev.speed()));
+        match dev.sync_ep0_packet() {
+            Ok(mps) => note(alloc::format!("MPS {mps}")),
+            Err(err) => note(alloc::format!("MPS {}", err_name(err))),
+        }
 
         // 裝置描述子 / 設定
         let _ = dev.get_device_descriptor();
