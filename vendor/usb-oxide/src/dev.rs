@@ -120,6 +120,7 @@ pub struct UsbDevice<H: Dma> {
     port: u8,
     speed: u8,
     ep0_mps: u16,
+    last_in: [u8; 4],
     device_ctx: PhysMem<H>,
     input_ctx: PhysMem<H>,
     ep0_ring: Mutex<Ring<H>>,
@@ -204,6 +205,7 @@ impl<H: Dma> UsbDevice<H> {
             port,
             speed,
             ep0_mps: max_packet,
+            last_in: [0; 4],
             device_ctx,
             input_ctx,
             ep0_ring: Mutex::new(ep0_ring),
@@ -367,6 +369,7 @@ impl<H: Dma> UsbDevice<H> {
         let mut buf = [0u8; 8];
         let setup = SetupPacket::get_descriptor(desc_type::DEVICE, 0, 8);
         let n = self.control_transfer(&setup, Some(&mut buf))?;
+        self.last_in = [buf[0], buf[1], buf[2], buf[7]];
         if n < 8 || buf[0] < 8 || buf[1] != 1 {
             return Ok(self.ep0_mps);
         }
@@ -407,7 +410,7 @@ impl<H: Dma> UsbDevice<H> {
     }
 
     /// Get configuration descriptor (full, with interfaces and endpoints)
-    pub fn get_config_descriptor(&self, index: u8) -> Result<Vec<u8>> {
+    pub fn get_config_descriptor(&mut self, index: u8) -> Result<Vec<u8>> {
         // Full-speed devices often NAK the first GET_DESCRIPTOR. Retry until
         // the 9-byte header is real; a zero header is not an empty config.
         // Full-speed EP0 is 8 bytes. A 9-byte request needs two packets and
@@ -428,6 +431,7 @@ impl<H: Dma> UsbDevice<H> {
             }
         }
         if !got {
+            self.last_in = [buf[0], buf[1], buf[2], buf[3]];
             return Err(UsbError::InvalidDescriptor);
         }
 
@@ -562,6 +566,11 @@ impl<H: Dma> UsbDevice<H> {
     /// Returns the device speed (see `reg::SPEED_*` constants).
     pub fn speed(&self) -> u8 {
         self.speed
+    }
+
+    /// First bytes from the last descriptor read.
+    pub fn last_in(&self) -> [u8; 4] {
+        self.last_in
     }
 
     /// Returns a reference to the xHCI controller.

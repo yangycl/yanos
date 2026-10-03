@@ -119,7 +119,11 @@ fn init_one(bar0: usize) -> bool {
         let config = match dev.get_config_descriptor(0) {
             Ok(config) => config,
             Err(err) => {
-                note(alloc::format!("CFG FAIL {port} {}", err_name(err)));
+                let b = dev.last_in();
+                note(alloc::format!(
+                    "CFG FAIL {port} {} {:02X}{:02X}",
+                    err_name(err), b[0], b[1]
+                ));
                 continue;
             }
         };
