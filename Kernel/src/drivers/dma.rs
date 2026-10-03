@@ -54,7 +54,7 @@ impl Dma for MyDma {
     }
 }
 
-/// 1MB DMA 池（identity map 假設）
+/// 1MB DMA 池。虛擬位址在 kernel image 裡，實體位址靠 virt_to_phys。
 #[repr(align(4096))]
 pub struct DmaPool(pub [u8; 1024 * 1024]);
 

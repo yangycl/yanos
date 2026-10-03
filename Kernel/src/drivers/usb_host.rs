@@ -20,6 +20,9 @@ pub fn init() -> bool {
         MyDma::new(DMA_POOL.0.as_ptr() as usize, DMA_POOL.0.len())
     };
 
+    // 真機 BIOS 還握著 xHCI 時直接 HCRST，SMI 會把機器重開。QEMU 沒這段。
+    bios_handoff(bar0);
+
     let ctrl = match XhciCtrl::new(bar0, dma) {
         Ok(c) => Arc::new(c),
         Err(_) => return false,
@@ -72,5 +75,50 @@ pub fn poll() {
     };
     if let Some(report) = hid.poll_keyboard() {
         keyboard::push_keyboard_report(&report);
+    }
+}
+/// xHCI extended capability 1：跟 BIOS 要 controller。
+/// 沒做這步就寫 USBCMD，實機上的 legacy SMI 常常直接 reset。
+fn bios_handoff(bar0: usize) {
+    let Some(mmio) = (unsafe { crate::memory::paging::map_mmio(bar0 as u64, 0x1000) }) else {
+        return;
+    };
+    let base = mmio as *mut u32;
+    let hccparams1 = unsafe { core::ptr::read_volatile(base.add(0x10 / 4)) };
+    let mut off = ((hccparams1 >> 16) & 0xFFFF) as usize * 4;
+    if off == 0 {
+        return;
+    }
+    for _ in 0..16 {
+        if off >= 0x1000 - 8 {
+            return;
+        }
+        let cap = unsafe { core::ptr::read_volatile(base.add(off / 4)) };
+        let id = cap & 0xFF;
+        let next = ((cap >> 8) & 0xFF) as usize;
+        if id == 1 {
+            let leg = base.wrapping_add(off / 4);
+            let smi = base.wrapping_add(off / 4 + 1);
+            unsafe {
+                // 先關掉 ownership-change SMI，不然設 OS owned 當下就重開。
+                core::ptr::write_volatile(smi, 0);
+                let mut sem = core::ptr::read_volatile(leg);
+                sem |= 1 << 24;
+                core::ptr::write_volatile(leg, sem);
+            }
+            for _ in 0..1_000_000 {
+                let sem = unsafe { core::ptr::read_volatile(leg) };
+                if sem & (1 << 16) == 0 {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            unsafe { core::ptr::write_volatile(smi, 0) };
+            return;
+        }
+        if next == 0 {
+            return;
+        }
+        off += next * 4;
     }
 }
