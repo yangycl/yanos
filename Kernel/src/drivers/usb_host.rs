@@ -10,6 +10,11 @@ use crate::drivers::pci::find_xhci_bars;
 
 static KEYBOARD: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
 static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static STATUS: Mutex<&'static str> = Mutex::new("NO CTRL");
+
+pub fn status() -> &'static str {
+    *STATUS.lock()
+}
 
 /// 開機時呼叫一次：每顆 xHCI 都試。接收器可能不在第一顆控制器。
 pub fn init() -> bool {
@@ -33,13 +38,21 @@ fn init_one(bar0: usize) -> bool {
 
     let ctrl = match XhciCtrl::new(bar0, dma) {
         Ok(c) => Arc::new(c),
-        Err(_) => return false,
+        Err(_) => {
+            *STATUS.lock() = "CTRL FAIL";
+            return false;
+        }
     };
 
+    let mut saw_port = false;
+    let mut saw_dev = false;
+    let mut saw_cfg = false;
+    let mut saw_hid = false;
     for port in 0..ctrl.max_ports() {
         if !ctrl.port_connected(port) {
             continue;
         }
+        saw_port = true;
         // 真機 handoff 後裝置多半還在 Disabled，不 reset 就不會進 Addressed。
         let _ = ctrl.reset_port(port);
         if !ctrl.port_connected(port) {
@@ -49,12 +62,14 @@ fn init_one(bar0: usize) -> bool {
         let Ok(mut dev) = UsbDevice::new(ctrl.clone(), port) else {
             continue;
         };
+        saw_dev = true;
 
         // 裝置描述子 / 設定
         let _ = dev.get_device_descriptor();
         let Ok(config) = dev.get_config_descriptor(0) else {
             continue;
         };
+        saw_cfg = true;
         // 通常 bConfigurationValue 在 config[5]
         if config.len() > 5 {
             let _ = dev.set_configuration(config[5]);
@@ -67,15 +82,29 @@ fn init_one(bar0: usize) -> bool {
             let Ok(hid) = HidDevice::from_interface(dev.clone(), iface, ep) else {
                 continue;
             };
-            if hid.hid_type() == HidType::Keyboard {
-                let _ = hid.set_protocol(0); // Boot Protocol
-                let _ = hid.queue_read();
-                *KEYBOARD.lock() = Some(hid);
-                return true;
+            saw_hid = true;
+            // 很多 2.4G 接收器是 report protocol，subclass 不是 boot，HidType 會是 Other。
+            if hid.hid_type() == HidType::Mouse {
+                continue;
             }
+            let _ = hid.set_protocol(0);
+            let _ = hid.queue_read();
+            *KEYBOARD.lock() = Some(hid);
+            *STATUS.lock() = "HID KBD OK";
+            return true;
         }
     }
-
+    *STATUS.lock() = if !saw_port {
+        "NO PORT"
+    } else if !saw_dev {
+        "ADDR FAIL"
+    } else if !saw_cfg {
+        "NO CFG"
+    } else if !saw_hid {
+        "NO HID IF"
+    } else {
+        "MOUSE ONLY"
+    };
     false
 }
 

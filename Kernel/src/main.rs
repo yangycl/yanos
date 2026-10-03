@@ -125,11 +125,8 @@ fn kernel_main(
         let usb_ok = crate::drivers::usb_host::init();
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
-        if usb_ok {
-            draw_string(buffer, width, 10, 90, "HID KBD OK", [0, 0, 0]);
-        } else {
-            draw_string(buffer, width, 10, 90, "NO HID", [0, 0, 0]);
-        }
+        draw_string(buffer, width, 10, 90, crate::drivers::usb_host::status(), [0, 0, 0]);
+        let _ = usb_ok;
     }
     let mut mouse = Mouse{
         x : 600,
