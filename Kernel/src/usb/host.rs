@@ -103,9 +103,12 @@ fn init_one(bar0: usize) -> bool {
 
         // 裝置描述子 / 設定
         let _ = dev.get_device_descriptor();
-        let Ok(config) = dev.get_config_descriptor(0) else {
-            note(alloc::format!("CFG FAIL {port}"));
-            continue;
+        let config = match dev.get_config_descriptor(0) {
+            Ok(config) => config,
+            Err(err) => {
+                note(alloc::format!("CFG FAIL {port} {}", err_name(err)));
+                continue;
+            }
         };
         let b0 = config.first().copied().unwrap_or(0);
         let b2 = config.get(2).copied().unwrap_or(0);

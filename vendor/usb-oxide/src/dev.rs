@@ -273,7 +273,9 @@ impl<H: Dma> UsbDevice<H> {
                     status: chunk as u32,
                     control: (trb_type::DATA << 10)
                         | if data_dir { 1 << 16 } else { 0 }
-                        | if last { (1 << 5) | (1 << 2) } else { 1 << 4 },
+                        | (1 << 5)
+                        | (1 << 2)
+                        | if last { 0 } else { 1 << 4 }
                 };
                 ep0_ring.enqueue(host, data_trb);
                 off += chunk;
@@ -298,8 +300,9 @@ impl<H: Dma> UsbDevice<H> {
         // Data TRB and status TRB each have IOC. The first event is the data
         // stage and carries the residual; status residual is always 0.
         let mut saw_data = data_buf.is_none();
+        let mut saw_status = false;
         let mut transferred = 0;
-        loop {
+        for _ in 0..5_000_000 {
             if let Some(evt) = self.ctrl.poll_event()
                 && evt.trb_type() == trb_type::TRANSFER_EVENT as u8
                 && evt.slot_id() == self.slot_id
@@ -319,12 +322,12 @@ impl<H: Dma> UsbDevice<H> {
                                 }
                             }
                             saw_data = true;
+                            if evt.completion_code() == completion::SHORT_PACKET {
+                                saw_status = true;
+                            }
                             continue;
                         }
-                        if let Some(buf) = data_buf {
-                            buf.free(host);
-                        }
-                        return Ok(transferred);
+                        saw_status = true;
                     }
                     completion::STALL_ERROR => {
                         if let Some(buf) = data_buf {
@@ -339,9 +342,23 @@ impl<H: Dma> UsbDevice<H> {
                         return Err(UsbError::XferFail(code));
                     }
                 }
+            } else {
+                spin_loop();
             }
-            spin_loop();
+            if saw_data && saw_status {
+                if let Some(buf) = data_buf {
+                    buf.free(host);
+                }
+                return Ok(transferred);
+            }
         }
+        if let Some(buf) = data_buf {
+            buf.free(host);
+        }
+        if saw_data {
+            return Ok(transferred);
+        }
+        Err(UsbError::Timeout)
     }
 
     /// Get device descriptor
