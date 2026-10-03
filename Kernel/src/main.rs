@@ -197,6 +197,7 @@ fn kernel_main(
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
     let desktop = desktop::Desktop::new();
+    let mut left_was_down = false;
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -223,7 +224,34 @@ fn kernel_main(
                 _ => {}
             }
         }
+        let (dx, dy, buttons) = crate::usb::take_mouse();
+        mouse.x += dx;
+        mouse.y += dy;
+        let left_down = buttons & 1 != 0;
         if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+            let width = framebuffer.info().width as i32;
+            let height = framebuffer.info().height as i32;
+            if mouse.x < 0 {
+                mouse.x = 0;
+            }
+            if mouse.y < 0 {
+                mouse.y = 0;
+            }
+            if mouse.x >= width {
+                mouse.x = width.saturating_sub(1);
+            }
+            if mouse.y >= height {
+                mouse.y = height.saturating_sub(1);
+            }
+            if left_down && !left_was_down && desktop.hit_explorer(mouse.x, mouse.y) {
+                let cluster = fat32
+                    .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
+                    .and_then(|entry| entry.first_cluster)
+                    .unwrap_or(fat32.root_cluster);
+                explorer = explorer::explorer::Explorer::new(cluster);
+                is_explorer_running = true;
+            }
+            left_was_down = left_down;
             desktop.draw(framebuffer);
             if is_explorer_running {
                 let width = framebuffer.info().width as usize;

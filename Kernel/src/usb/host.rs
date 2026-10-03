@@ -9,6 +9,10 @@ use crate::drivers::keyboard;
 use crate::usb::pci::find_xhci_bars;
 
 static KEYBOARD: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
+static MOUSE: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
+static MOUSE_DX: Mutex<i32> = Mutex::new(0);
+static MOUSE_DY: Mutex<i32> = Mutex::new(0);
+static MOUSE_BTN: Mutex<u8> = Mutex::new(0);
 static STICK: Mutex<Option<MscDevice<MyDma>>> = Mutex::new(None);
 static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static STATUS: Mutex<&'static str> = Mutex::new("NO CTRL");
@@ -173,6 +177,10 @@ fn init_one(bar0: usize) -> bool {
             note(alloc::format!("IF {kind}"));
             // 很多 2.4G 接收器是 report protocol，subclass 不是 boot，HidType 會是 Other。
             if hid.hid_type() == HidType::Mouse {
+                let _ = hid.set_protocol(0);
+                let _ = hid.queue_read();
+                *MOUSE.lock() = Some(hid);
+                note(alloc::string::String::from("MOU OK"));
                 continue;
             }
             let _ = hid.set_protocol(0);
@@ -200,7 +208,7 @@ fn init_one(bar0: usize) -> bool {
         "MOUSE ONLY"
     };
     // 後面的空控制器不要把前面的 ADDR FAIL 蓋成 NO PORT。
-    if *STATUS.lock() == "HID KBD OK" || STICK.lock().is_some() {
+    if *STATUS.lock() == "HID KBD OK" || MOUSE.lock().is_some() || STICK.lock().is_some() {
         return true;
     }
     if saw_port || *STATUS.lock() == "NO CTRL" || *STATUS.lock() == "NO PORT" {
@@ -294,8 +302,15 @@ fn err_name(err: UsbError) -> alloc::string::String {
 }
 
 /// 主迴圈每圈呼叫：有鍵就推進 keyboard 佇列
+pub fn take_mouse() -> (i32, i32, u8) {
+    let dx = core::mem::replace(&mut *MOUSE_DX.lock(), 0);
+    let dy = core::mem::replace(&mut *MOUSE_DY.lock(), 0);
+    let buttons = *MOUSE_BTN.lock();
+    (dx, dy, buttons)
+}
+
 pub fn poll() {
-    if KEYBOARD.lock().is_none() {
+    if KEYBOARD.lock().is_none() && MOUSE.lock().is_none() {
         let n = RETRY.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         // 接收器開機後才插上也要看得到。不要每一圈都 HCRST。
         if n % 2000 == 0 {
@@ -303,12 +318,17 @@ pub fn poll() {
         }
         return;
     }
-    let guard = KEYBOARD.lock();
-    let Some(hid) = guard.as_ref() else {
-        return;
-    };
-    if let Some(report) = hid.poll_keyboard() {
-        keyboard::push_keyboard_report(&report);
+    if let Some(hid) = KEYBOARD.lock().as_ref() {
+        if let Some(report) = hid.poll_keyboard() {
+            keyboard::push_keyboard_report(&report);
+        }
+    }
+    if let Some(hid) = MOUSE.lock().as_ref() {
+        if let Some(report) = hid.poll_mouse() {
+            *MOUSE_DX.lock() += report.x as i32;
+            *MOUSE_DY.lock() += report.y as i32;
+            *MOUSE_BTN.lock() = report.buttons;
+        }
     }
 }
 /// xHCI extended capability 1：跟 BIOS 要 controller。
