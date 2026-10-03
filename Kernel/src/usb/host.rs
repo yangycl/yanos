@@ -68,6 +68,15 @@ fn init_one(bar0: usize) -> bool {
         }
     };
     note(alloc::format!("PORTS {}", ctrl.max_ports()));
+    // Reset 後 USB2 裝置要一段時間才把 CCS 拉起來。
+    for _ in 0..20 {
+        if (0..ctrl.max_ports()).any(|port| ctrl.port_connected(port)) {
+            break;
+        }
+        for _ in 0..1_000_000 {
+            core::hint::spin_loop();
+        }
+    }
 
     let mut saw_port = false;
     let mut saw_dev = false;

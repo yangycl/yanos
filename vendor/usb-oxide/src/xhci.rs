@@ -170,6 +170,12 @@ impl<H: Dma> XhciCtrl<H> {
             spin_loop();
         }
 
+        // HCRST drops port power. A plugged device stays invisible until PP is set.
+        for port in 0..self.max_ports {
+            let offset = reg::port_reg_base(self.cap_length, port);
+            self.write_reg(offset, reg::PORTSC_PP);
+        }
+
         Ok(())
     }
 
