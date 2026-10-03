@@ -4,7 +4,7 @@ use usb_oxide::{
     find_hid_interfaces, HidDevice, HidType, UsbDevice, UsbError, XhciCtrl,
 };
 
-use crate::drivers::dma::{MyDma, DMA_POOL};
+use crate::dma::{MyDma, DMA_POOL};
 use crate::drivers::keyboard;
 use crate::usb::pci::find_xhci_bars;
 

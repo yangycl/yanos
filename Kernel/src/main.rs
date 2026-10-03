@@ -44,6 +44,7 @@ use crate::fs::file_location::FileLocation;
 use linked_list_allocator::LockedHeap;
 
 mod explorer;
+mod dma;
 mod usb;
 mod memory;
 
