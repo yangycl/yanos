@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use spin::Mutex;
 use usb_oxide::{
-    find_hid_interfaces, HidDevice, HidType, UsbDevice, UsbError, XhciCtrl,
+    find_hid_interfaces, HidDevice, HidType, MscDevice, UsbDevice, UsbError, XhciCtrl,
 };
 
 use crate::dma::{MyDma, DMA_POOL};
@@ -9,6 +9,7 @@ use crate::drivers::keyboard;
 use crate::usb::pci::find_xhci_bars;
 
 static KEYBOARD: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
+static STICK: Mutex<Option<MscDevice<MyDma>>> = Mutex::new(None);
 static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static STATUS: Mutex<&'static str> = Mutex::new("NO CTRL");
 static LOG: Mutex<alloc::vec::Vec<alloc::string::String>> = Mutex::new(alloc::vec::Vec::new());
@@ -178,7 +179,13 @@ fn init_one(bar0: usize) -> bool {
             let _ = hid.queue_read();
             *KEYBOARD.lock() = Some(hid);
             *STATUS.lock() = "HID KBD OK";
-            return true;
+            break;
+        }
+        if STICK.lock().is_none() {
+            if let Some(msc) = attach_msc(&dev, &config) {
+                *STICK.lock() = Some(msc);
+                note(alloc::string::String::from("MSC OK"));
+            }
         }
     }
     let status = if !saw_port {
@@ -193,10 +200,80 @@ fn init_one(bar0: usize) -> bool {
         "MOUSE ONLY"
     };
     // 後面的空控制器不要把前面的 ADDR FAIL 蓋成 NO PORT。
+    if *STATUS.lock() == "HID KBD OK" || STICK.lock().is_some() {
+        return true;
+    }
     if saw_port || *STATUS.lock() == "NO CTRL" || *STATUS.lock() == "NO PORT" {
         *STATUS.lock() = status;
     }
     false
+}
+
+pub fn take_stick() -> Option<MscDevice<MyDma>> {
+    STICK.lock().take()
+}
+
+fn attach_msc(dev: &Arc<UsbDevice<MyDma>>, config: &[u8]) -> Option<MscDevice<MyDma>> {
+    use usb_oxide::{EndpointDesc, InterfaceDesc, class, desc_type, ep_type};
+    let mut off = 0;
+    let mut iface: Option<InterfaceDesc> = None;
+    let mut ep_in: Option<EndpointDesc> = None;
+    let mut ep_out: Option<EndpointDesc> = None;
+    while off + 2 <= config.len() {
+        let len = config[off] as usize;
+        if len < 2 || off + len > config.len() {
+            off += 1;
+            continue;
+        }
+        let dtype = config[off + 1];
+        if dtype == desc_type::INTERFACE && len >= 9 && config[off + 5] == class::MASS_STORAGE {
+            iface = Some(InterfaceDesc {
+                length: config[off],
+                desc_type: config[off + 1],
+                interface_number: config[off + 2],
+                alternate_setting: config[off + 3],
+                num_endpoints: config[off + 4],
+                interface_class: config[off + 5],
+                interface_subclass: config[off + 6],
+                interface_protocol: config[off + 7],
+                interface: config[off + 8],
+            });
+            ep_in = None;
+            ep_out = None;
+            note(alloc::format!(
+                "MSC sub {} proto {:02X}",
+                config[off + 6],
+                config[off + 7]
+            ));
+        } else if dtype == desc_type::ENDPOINT && len >= 7 && iface.is_some() {
+            let addr = config[off + 2];
+            let attr = config[off + 3];
+            if attr & 0x03 == ep_type::BULK {
+                let ep = EndpointDesc {
+                    length: config[off],
+                    desc_type: config[off + 1],
+                    endpoint_address: addr,
+                    attributes: attr,
+                    max_packet_size: u16::from_le_bytes([config[off + 4], config[off + 5]]),
+                    interval: config[off + 6],
+                };
+                if addr & 0x80 != 0 {
+                    ep_in = Some(ep);
+                } else {
+                    ep_out = Some(ep);
+                }
+            }
+        }
+        off += len;
+    }
+    let (iface, ep_in, ep_out) = (iface?, ep_in?, ep_out?);
+    match MscDevice::from_interface(dev.clone(), &iface, &ep_in, &ep_out) {
+        Ok(msc) => Some(msc),
+        Err(err) => {
+            note(alloc::format!("MSC {}", err_name(err)));
+            None
+        }
+    }
 }
 
 fn err_name(err: UsbError) -> alloc::string::String {

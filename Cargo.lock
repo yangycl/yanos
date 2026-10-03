@@ -579,7 +579,6 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 [[package]]
 name = "usb-oxide"
 version = "0.2.1"
-source = "git+https://github.com/H4n-uL/usb-oxide?branch=main#8dd3b75eee46e810744d3f38d386cd64c711be43"
 dependencies = [
  "spin 0.10.1",
 ]

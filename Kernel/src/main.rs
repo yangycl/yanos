@@ -44,6 +44,7 @@ use crate::fs::file_location::FileLocation;
 use linked_list_allocator::LockedHeap;
 
 mod explorer;
+mod desktop;
 mod dma;
 mod usb;
 mod memory;
@@ -144,8 +145,10 @@ fn kernel_main(
     // 上面 framebuffer 區塊已經 init 過。再叫一次會 HCRST，把剛找到的鍵盤清掉。
     let mut keyboard = KeyboardDecoder::new();
     let mut keyboard_state = KeyboardState::new();
+    use crate::fs::block::BlockDevice;
     use crate::fs::fat32::Fat32;
     use crate::fs::ramdisk::RamDisk;
+    use crate::fs::usbdisk::UsbDisk;
     let mut memory = [0u8; 512 * 10];
     memory[11..13].copy_from_slice(&512u16.to_le_bytes());
     memory[13] = 1;
@@ -165,29 +168,35 @@ fn kernel_main(
     memory[1026] = b'C';
     memory[1536] = b'D';
     memory[1537] = b'E';
-    let disk = RamDisk::new(&mut memory);
-    let mut fat32 = Fat32::mount(disk);
-    let entry = DirectoryEntry {
-        name: *b"TEST    TXT",
-        attr: 0x20,
-        first_cluster: None,
-        file_size: 0,
+    enum BootDisk<'a> {
+        Ram(RamDisk<'a>),
+        Usb(UsbDisk),
+    }
+    impl BlockDevice for BootDisk<'_> {
+        fn read_sector(&mut self, lba: u64, buffer: &mut [u8; 512]) {
+            match self {
+                BootDisk::Ram(disk) => disk.read_sector(lba, buffer),
+                BootDisk::Usb(disk) => disk.read_sector(lba, buffer),
+            }
+        }
+        fn write_sector(&mut self, lba: u64, buffer: &[u8; 512]) {
+            match self {
+                BootDisk::Ram(disk) => disk.write_sector(lba, buffer),
+                BootDisk::Usb(disk) => disk.write_sector(lba, buffer),
+            }
+        }
+    }
+    let mut fat32 = if let Some(msc) = crate::usb::take_stick() {
+        match UsbDisk::open(msc) {
+            Some(disk) => Fat32::mount(BootDisk::Usb(disk)),
+            None => Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory))),
+        }
+    } else {
+        Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))
     };
-    let mut file = File::new(&mut fat32, entry);
-    file.write(b"HELLO").unwrap();
-    file.position = 0;
-    let mut buffer = [0u8;512];
-    file.read(&mut buffer);
-    let text = core::str::from_utf8(&buffer[..5]).unwrap_or("READ ERROR");
-    let entry = DirectoryEntry {
-        name: *b"TEST    TXT",
-        attr: 0x20,
-        first_cluster: None,
-        file_size: 0,
-    };
-    let mut file = File::new(&mut fat32, entry);
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
+    let desktop = desktop::Desktop::new();
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -199,25 +208,18 @@ fn kernel_main(
             }
         }
         if let Some(ch) = drivers::keyboard::read_char() {
-            if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-                let width = framebuffer.info().width as usize;
-                let buffer = framebuffer.buffer_mut();
-                let shown = [ch as u8];
-                let label = core::str::from_utf8(&shown).unwrap_or("?");
-                draw_string(buffer, width, 10, 110, "KEY", [0, 0, 0]);
-                draw_string(buffer, width, 50, 110, label, [0, 0, 0]);
-            }
             match ch {
                 'q' => {
                     is_explorer_running = false;
-                    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-                        let width = framebuffer.info().width as usize;
-                        let height = framebuffer.info().height as usize;
-                        let buffer = framebuffer.buffer_mut();
-                        draw_rect(buffer, width, 0, 0, width, height, [255, 255, 255]);
-                    }
                 }
-                'e' => { is_explorer_running = true; }
+                'e' => {
+                    let cluster = fat32
+                        .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
+                        .and_then(|entry| entry.first_cluster)
+                        .unwrap_or(fat32.root_cluster);
+                    explorer = explorer::explorer::Explorer::new(cluster);
+                    is_explorer_running = true;
+                }
                 _ => {}
             }
         }
@@ -225,6 +227,7 @@ fn kernel_main(
             if is_explorer_running {
                 explorer.draw(framebuffer, &mut fat32);
             } else {
+                desktop.draw(framebuffer);
                 let width = framebuffer.info().width as usize;
                 let buffer = framebuffer.buffer_mut();
                 draw_cursor(buffer, width, mouse.x, mouse.y);

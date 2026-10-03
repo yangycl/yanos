@@ -228,7 +228,7 @@ impl<H: Dma> UsbDevice<H> {
 
         // Allocate data buffer if needed
         // Use 64-byte alignment for DMA efficiency (cache line size)
-        let data_buf = if data_len > 0 {
+        let mut data_buf = if data_len > 0 {
             let buf = PhysMem::alloc(host, data_len, 64)?;
             if !data_dir {
                 // OUT: copy data to buffer
@@ -257,103 +257,117 @@ impl<H: Dma> UsbDevice<H> {
         };
         ep0_ring.enqueue(host, setup_trb);
 
-        // Data stage, one TRB per EP0 packet. A single 254-byte TRB comes back
-        // as a 9-byte header on this controller, so the interface bytes stay zero.
-        let mps = self.ep0_mps as usize;
-        if let Some(ref buf) = data_buf {
-            let mut left = (setup.length as usize).min(data_len);
-            let mut off = 0;
-            while left > 0 {
-                let chunk = left.min(mps);
-                left -= chunk;
-                let last = left == 0;
+        // Full-speed EP0 is 8 bytes. Queuing every data TRB and copying on
+        // the status event only DMAs the first packet here, so an 84-byte
+        // config is `09 02 54 00` followed by zeros. Doorbell and copy one
+        // packet at a time: 84 / 8 = 11 reads.
+        let mps = (self.ep0_mps as usize).max(8);
+        let want = (setup.length as usize).min(data_len);
+        let mut transferred = 0usize;
+
+        if data_dir && want > 0 {
+            let buf = data_buf.take().unwrap();
+            let mut off = 0usize;
+            while off < want {
+                let chunk = (want - off).min(mps);
                 let data_trb = Trb {
                     param: buf.phys(host) + off as u64,
                     status: chunk as u32,
                     control: (trb_type::DATA << 10)
-                        | if data_dir { 1 << 16 } else { 0 }
-                        | (1 << 2)
-                        | if last { 0 } else { 1 << 4 }
+                        | (1 << 16) // DIR IN
+                        | (1 << 5)  // IOC, one event per packet
+                        | (1 << 2), // ISP
                 };
                 ep0_ring.enqueue(host, data_trb);
-                off += chunk;
+                drop(ep0_ring);
+                self.ctrl.ring_doorbell(self.slot_id, 1);
+                let waited = self.wait_ep0();
+                ep0_ring = self.ep0_ring.lock();
+                let (code, residual) = match waited {
+                    Ok(v) => v,
+                    Err(err) => {
+                        buf.free(host);
+                        return Err(err);
+                    }
+                };
+                match code {
+                    completion::SUCCESS | completion::SHORT_PACKET => {
+                        let n = chunk.saturating_sub(residual as usize).min(chunk);
+                        if let Some(d) = data.as_mut() {
+                            unsafe {
+                                for i in 0..n {
+                                    d[off + i] =
+                                        core::ptr::read_volatile(buf.as_ptr::<u8>().add(off + i));
+                                }
+                            }
+                        }
+                        transferred += n;
+                        off += n;
+                        if code == completion::SHORT_PACKET || n < chunk {
+                            break;
+                        }
+                    }
+                    completion::STALL_ERROR => {
+                        buf.free(host);
+                        return Err(UsbError::Stall);
+                    }
+                    _ => {
+                        buf.free(host);
+                        return Err(UsbError::XferFail(code));
+                    }
+                }
             }
+            buf.free(host);
+            if transferred > 0
+                && data
+                    .as_ref()
+                    .map(|d| d[..transferred].iter().all(|b| *b == 0))
+                    .unwrap_or(false)
+            {
+                return Err(UsbError::Timeout);
+            }
+        } else if let Some(ref buf) = data_buf {
+            let data_trb = Trb {
+                param: buf.phys(host),
+                status: want as u32,
+                control: (trb_type::DATA << 10) | (1 << 2),
+            };
+            ep0_ring.enqueue(host, data_trb);
         }
 
-        // Status Stage TRB
         let status_trb = Trb {
             param: 0,
             status: 0,
             control: (trb_type::STATUS << 10)
-                | if data_len > 0 && setup.length > 0 && data_dir { 0 } else { 1 << 16 } // DIR
+                | if data_len > 0 && setup.length > 0 && data_dir { 0 } else { 1 << 16 }
                 | (1 << 5), // IOC
         };
         ep0_ring.enqueue(host, status_trb);
-
         drop(ep0_ring);
-
-        // Ring doorbell for EP0 (target = 1)
         self.ctrl.ring_doorbell(self.slot_id, 1);
 
-        // Only the status TRB has IOC. Copy after that event; copying the
-        // first event was reading a buffer the device had not written yet.
-        let mut transferred = 0usize;
-        let mut done = false;
+        match self.wait_ep0() {
+            Ok((completion::SUCCESS | completion::SHORT_PACKET, _)) => {
+                if data_dir && data_len > 0 && transferred == 0 {
+                    return Err(UsbError::Timeout);
+                }
+                Ok(transferred)
+            }
+            Ok((completion::STALL_ERROR, _)) => Err(UsbError::Stall),
+            Ok((code, _)) => Err(UsbError::XferFail(code)),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn wait_ep0(&self) -> Result<(u8, u32)> {
         for _ in 0..5_000_000 {
             if let Some(evt) = self.ctrl.poll_event()
                 && evt.trb_type() == trb_type::TRANSFER_EVENT as u8
                 && evt.slot_id() == self.slot_id
             {
-                let code = evt.completion_code();
-                match code {
-                    completion::SUCCESS | completion::SHORT_PACKET => {
-                        transferred = if data_len == 0 {
-                            0
-                        } else {
-                            (setup.length as usize)
-                                .saturating_sub(evt.transfer_length() as usize)
-                                .min(data_len)
-                        };
-                        if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
-                            unsafe {
-                                for i in 0..transferred {
-                                    d[i] = core::ptr::read_volatile(buf.as_ptr::<u8>().add(i));
-                                }
-                            }
-                            if transferred > 0 && d[..transferred].iter().all(|b| *b == 0) {
-                                transferred = 0;
-                            }
-                        }
-                        done = true;
-                    }
-                    completion::STALL_ERROR => {
-                        if let Some(buf) = data_buf {
-                            buf.free(host);
-                        }
-                        return Err(UsbError::Stall);
-                    }
-                    _ => {
-                        if let Some(buf) = data_buf {
-                            buf.free(host);
-                        }
-                        return Err(UsbError::XferFail(code));
-                    }
-                }
-            } else {
-                spin_loop();
+                return Ok((evt.completion_code(), evt.transfer_length()));
             }
-            if done {
-                if let Some(buf) = data_buf {
-                    buf.free(host);
-                }
-                if data_len > 0 && transferred == 0 {
-                    return Err(UsbError::Timeout);
-                }
-                return Ok(transferred);
-            }
-        }
-        if let Some(buf) = data_buf {
-            buf.free(host);
+            spin_loop();
         }
         Err(UsbError::Timeout)
     }

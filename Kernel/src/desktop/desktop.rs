@@ -1,14 +1,12 @@
-use crate::explorer::explorer;
-use crate::explorer::explorer::Explorer;
-
 use bootloader_api::info::FrameBuffer;
+
 use crate::drivers::framebuffer as fb;
 use crate::drivers::keyboard::KeyEvent;
-use crate::drives::keyboard::read_char;
 
-/// Simple desktop environment
+/// 桌面就是一個目錄。現在是 `/home/desktop`，之後只換使用者名稱。
+pub const DESKTOP_PATH: &str = "/home/desktop";
+
 pub struct Desktop {
-    /// Position of the Explorer text
     explorer_x: usize,
     explorer_y: usize,
 }
@@ -21,40 +19,27 @@ impl Desktop {
         }
     }
 
-    /// Handle keyboard events (currently does nothing)
-    pub fn update(&mut self, _event: KeyEvent) {
-        // TODO: implement later
+    pub fn update(&mut self, _event: KeyEvent) {}
+
+    /// Explorer 圖示的範圍。主迴圈有滑鼠座標時再呼叫。
+    pub fn hit_explorer(&self, x: i32, y: i32) -> bool {
+        x > self.explorer_x as i32
+            && x < self.explorer_x as i32 + 100
+            && y > self.explorer_y as i32
+            && y < self.explorer_y as i32 + 40
     }
 
-    /// Empty click event (can be connected to mouse or keyboard confirm later)
-    pub fn on_click(&mut self, _x: i32, _y: i32) {
-        if (x > 40 || x < 140) && (y > 40 || y < 140){
-            let mut explorer = Explorer::new();
-            
-            while(read_char() != "q"){
-                explorer = explorer::draw("/home/desktop/")
-            }
-        }  
-    }
-
-    /// Draw the entire desktop
     pub fn draw(&self, framebuffer: &mut FrameBuffer) {
         let width = framebuffer.info().width as usize;
         let height = framebuffer.info().height as usize;
         let buffer = framebuffer.buffer_mut();
 
-        // Desktop background (light gray-white)
-        fb::draw_rect(
-            buffer,
-            width,
-            0,
-            0,
-            width,
-            height,
-            [240, 240, 245],
-        );
+        fb::draw_rect(buffer, width, 0, 0, width, height, [240, 240, 245]);
 
-        // Display Explorer as text
+        let start_x = width / 2 - 100;
+        let start_y = height / 2 - 20;
+        fb::draw_string(buffer, width, start_x, start_y, "yanos", [200, 80, 0]);
+
         fb::draw_string(
             buffer,
             width,
