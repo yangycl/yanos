@@ -376,13 +376,16 @@ impl<H: Dma> UsbDevice<H> {
     pub fn get_config_descriptor(&self, index: u8) -> Result<Vec<u8>> {
         // Full-speed devices often NAK the first GET_DESCRIPTOR. Retry until
         // the 9-byte header is real; a zero header is not an empty config.
+        // Full-speed EP0 is 8 bytes. A 9-byte request needs two packets and
+        // comes back without a config header on this controller.
+        let ask = if self.speed <= reg::SPEED_FULL { 8 } else { 9 };
         let mut buf = [0u8; 9];
         let mut got = false;
         for _ in 0..4 {
             buf = [0u8; 9];
-            let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, 9);
-            let n = self.control_transfer(&setup, Some(&mut buf))?;
-            if n >= 9 && buf[0] == 9 && buf[1] == 2 {
+            let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, ask);
+            let n = self.control_transfer(&setup, Some(&mut buf[..ask as usize]))?;
+            if n >= 4 && buf[0] == 9 && buf[1] == 2 {
                 got = true;
                 break;
             }
@@ -394,8 +397,7 @@ impl<H: Dma> UsbDevice<H> {
             return Err(UsbError::InvalidDescriptor);
         }
 
-        let config = unsafe { *(buf.as_ptr() as *const ConfigDesc) };
-        let total_len = config.total_length as usize;
+        let total_len = u16::from_le_bytes([buf[2], buf[3]]) as usize;
         if total_len < 9 || total_len > 1024 {
             return Err(UsbError::InvalidDescriptor);
         }
