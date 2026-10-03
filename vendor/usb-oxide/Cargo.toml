@@ -1,0 +1,10 @@
+[package]
+name = "usb-oxide"
+version = "0.2.1"
+edition = "2024"
+description = "Bare-metal lightweight USB/xHCI driver"
+license = "MIT-0"
+keywords = ["usb", "xhci", "hid", "no_std"]
+
+[dependencies]
+spin = "0.10.0"
