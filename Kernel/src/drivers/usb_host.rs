@@ -11,16 +11,39 @@ use crate::drivers::pci::find_xhci_bars;
 static KEYBOARD: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
 static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static STATUS: Mutex<&'static str> = Mutex::new("NO CTRL");
+static LOG: Mutex<alloc::vec::Vec<alloc::string::String>> = Mutex::new(alloc::vec::Vec::new());
 
 pub fn status() -> &'static str {
     *STATUS.lock()
 }
 
+pub fn log_lines() -> alloc::vec::Vec<alloc::string::String> {
+    LOG.lock().clone()
+}
+
+fn note(line: alloc::string::String) {
+    let mut log = LOG.lock();
+    if log.len() < 24 {
+        log.push(line);
+    }
+}
+
+fn hex16(v: usize) -> alloc::string::String {
+    alloc::format!("{v:X}")
+}
+
 /// 開機時呼叫一次：每顆 xHCI 都試。接收器可能不在第一顆控制器。
 pub fn init() -> bool {
+    LOG.lock().clear();
     let mut bars = [0usize; 4];
     let n = find_xhci_bars(&mut bars);
-    for bar0 in bars.into_iter().take(n) {
+    note(alloc::format!("XHCI N {n}"));
+    if n == 0 {
+        *STATUS.lock() = "NO CTRL";
+        return false;
+    }
+    for (i, bar0) in bars.into_iter().take(n).enumerate() {
+        note(alloc::format!("BAR{i} {}", hex16(bar0)));
         if init_one(bar0) {
             return true;
         }
@@ -39,10 +62,12 @@ fn init_one(bar0: usize) -> bool {
     let ctrl = match XhciCtrl::new(bar0, dma) {
         Ok(c) => Arc::new(c),
         Err(_) => {
+            note(alloc::string::String::from("CTRL FAIL"));
             *STATUS.lock() = "CTRL FAIL";
             return false;
         }
     };
+    note(alloc::format!("PORTS {}", ctrl.max_ports()));
 
     let mut saw_port = false;
     let mut saw_dev = false;
@@ -53,36 +78,56 @@ fn init_one(bar0: usize) -> bool {
             continue;
         }
         saw_port = true;
+        note(alloc::format!("CCS {port}"));
         // 真機 handoff 後裝置多半還在 Disabled，不 reset 就不會進 Addressed。
-        let _ = ctrl.reset_port(port);
-        if !ctrl.port_connected(port) {
+        if ctrl.reset_port(port).is_err() {
+            note(alloc::format!("RST FAIL {port}"));
+            continue;
+        }
+        let still = ctrl.port_connected(port);
+        note(alloc::format!("AFTER {port} {still}"));
+        if !still {
             continue;
         }
 
         let Ok(mut dev) = UsbDevice::new(ctrl.clone(), port) else {
+            note(alloc::format!("ADDR FAIL {port}"));
             continue;
         };
         saw_dev = true;
+        note(alloc::format!("ADDR OK {port}"));
 
         // 裝置描述子 / 設定
         let _ = dev.get_device_descriptor();
         let Ok(config) = dev.get_config_descriptor(0) else {
+            note(alloc::format!("CFG FAIL {port}"));
             continue;
         };
         saw_cfg = true;
+        let cfg_val = config.get(5).copied().unwrap_or(0);
+        note(alloc::format!("CFG {} VAL {cfg_val}", config.len()));
         // 通常 bConfigurationValue 在 config[5]
         if config.len() > 5 {
-            let _ = dev.set_configuration(config[5]);
+            let set_ok = dev.set_configuration(config[5]).is_ok();
+            note(alloc::format!("SETCFG {set_ok}"));
         }
 
         let dev = Arc::new(dev);
         let hid_list = find_hid_interfaces(&config);
+        note(alloc::format!("HIDN {}", hid_list.len()));
 
         for (iface, ep) in hid_list.iter() {
             let Ok(hid) = HidDevice::from_interface(dev.clone(), iface, ep) else {
+                note(alloc::string::String::from("HID NEW FAIL"));
                 continue;
             };
             saw_hid = true;
+            let kind = match hid.hid_type() {
+                HidType::Keyboard => "KBD",
+                HidType::Mouse => "MOU",
+                HidType::Other => "OTH",
+            };
+            note(alloc::format!("IF {kind}"));
             // 很多 2.4G 接收器是 report protocol，subclass 不是 boot，HidType 會是 Other。
             if hid.hid_type() == HidType::Mouse {
                 continue;

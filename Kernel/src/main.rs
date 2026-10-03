@@ -126,6 +126,9 @@ fn kernel_main(
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
         draw_string(buffer, width, 10, 90, crate::drivers::usb_host::status(), [0, 0, 0]);
+        for (i, line) in crate::drivers::usb_host::log_lines().iter().enumerate() {
+            draw_string(buffer, width, 10, 110 + i * 10, line, [0, 0, 0]);
+        }
         let _ = usb_ok;
     }
     let mut mouse = Mouse{
