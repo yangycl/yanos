@@ -133,6 +133,24 @@ fn kernel_main(
             draw_string(buffer, width, 10, 110 + i * 10, line, [0, 0, 0]);
         }
         let _ = usb_ok;
+        // PIT 預設約 18.2Hz。91 tick 大約 5 秒，然後清掉開機 LOG。
+        let start = crate::arch::x86_64::interrupts::TIMER_TICKS
+            .load(core::sync::atomic::Ordering::Relaxed);
+        let mut spins = 0u32;
+        while crate::arch::x86_64::interrupts::TIMER_TICKS
+            .load(core::sync::atomic::Ordering::Relaxed)
+            .wrapping_sub(start)
+            < 91
+            && spins < 80_000_000
+        {
+            crate::usb::poll();
+            x86_64::instructions::hlt();
+            spins += 1;
+        }
+        let width = framebuffer.info().width as usize;
+        let height = framebuffer.info().height as usize;
+        let buffer = framebuffer.buffer_mut();
+        draw_rect(buffer, width, 0, 0, width, height, [255, 255, 255]);
     }
     let mut mouse = Mouse{
         x : 600,
@@ -196,8 +214,6 @@ fn kernel_main(
     };
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
-    let desktop = desktop::Desktop::new();
-    let mut left_was_down = false;
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -224,10 +240,9 @@ fn kernel_main(
                 _ => {}
             }
         }
-        let (dx, dy, buttons) = crate::usb::take_mouse();
+        let (dx, dy, _buttons) = crate::usb::take_mouse();
         mouse.x += dx;
         mouse.y += dy;
-        let left_down = buttons & 1 != 0;
         if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
             let width = framebuffer.info().width as i32;
             let height = framebuffer.info().height as i32;
@@ -243,16 +258,6 @@ fn kernel_main(
             if mouse.y >= height {
                 mouse.y = height.saturating_sub(1);
             }
-            if left_down && !left_was_down && desktop.hit_explorer(mouse.x, mouse.y) {
-                let cluster = fat32
-                    .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
-                    .and_then(|entry| entry.first_cluster)
-                    .unwrap_or(fat32.root_cluster);
-                explorer = explorer::explorer::Explorer::new(cluster);
-                is_explorer_running = true;
-            }
-            left_was_down = left_down;
-            desktop.draw(framebuffer);
             if is_explorer_running {
                 let width = framebuffer.info().width as usize;
                 let height = framebuffer.info().height as usize;

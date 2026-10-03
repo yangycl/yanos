@@ -149,16 +149,19 @@ fn keyboard_handler(
 
 }
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
+pub static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+
 extern "x86-interrupt" fn timer_handler(
     _stack_frame: InterruptStackFrame
 ) {
-
+    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     unsafe {
         crate::arch::x86_64::pic::PICS
             .lock()
             .notify_end_of_interrupt(32);
     }
-
 }
 
 pub fn get_key() -> Option<u8>
