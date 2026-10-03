@@ -126,27 +126,17 @@ fn init_one(bar0: usize) -> bool {
         if config.len() < 9 || b0 == 0 {
             continue;
         }
+        let mut classes = alloc::string::String::new();
         let mut off = 0;
-        let mut shown = 0;
-        while off + 2 <= config.len() && shown < 8 {
-            let len = config[off] as usize;
-            let dtype = config[off + 1];
-            if len == 0 || off + len > config.len() {
-                note(alloc::format!("BAD {off}"));
-                break;
+        let mut ncls = 0;
+        while off + 9 <= config.len() && ncls < 6 {
+            if config[off] == 9 && config[off + 1] == 4 {
+                classes.push_str(&alloc::format!(" {}", config[off + 5]));
+                ncls += 1;
             }
-            if dtype == 4 && len >= 9 {
-                note(alloc::format!(
-                    "I {} {} {}",
-                    config[off + 5], config[off + 6], config[off + 7]
-                ));
-                shown += 1;
-            } else if dtype == 5 && len >= 7 {
-                note(alloc::format!("E {:02X} {:02X}", config[off + 2], config[off + 3]));
-                shown += 1;
-            }
-            off += len;
+            off += 1;
         }
+        note(alloc::format!("CLS{classes}"));
         saw_cfg = true;
         let cfg_val = config.get(5).copied().unwrap_or(0);
         note(alloc::format!("VAL {cfg_val}"));

@@ -773,8 +773,10 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
         let len = config_data[offset] as usize;
         let dtype = config_data[offset + 1];
 
-        if len == 0 || offset + len > config_data.len() {
-            break;
+        if len < 2 || offset + len > config_data.len() {
+            // 長度斷掉就逐 byte 找下一個 interface，不要把後面的 HID 丟掉。
+            offset += 1;
+            continue;
         }
 
         // Read fields by offset. The descriptor is packed and often unaligned.
@@ -816,6 +818,45 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
         }
 
         offset += len;
+    }
+
+    if result.is_empty() {
+        let mut i = 0;
+        while i + 9 <= config_data.len() {
+            if config_data[i] == 9 && config_data[i + 1] == desc_type::INTERFACE && config_data[i + 5] == class::HID {
+                let iface = InterfaceDesc {
+                    length: 9,
+                    desc_type: desc_type::INTERFACE,
+                    interface_number: config_data[i + 2],
+                    alternate_setting: config_data[i + 3],
+                    num_endpoints: config_data[i + 4],
+                    interface_class: class::HID,
+                    interface_subclass: config_data[i + 6],
+                    interface_protocol: config_data[i + 7],
+                    interface: config_data[i + 8],
+                };
+                let mut j = i + 9;
+                while j + 7 <= config_data.len() && j < i + 64 {
+                    if config_data[j] >= 7 && config_data[j + 1] == desc_type::ENDPOINT {
+                        let addr = config_data[j + 2];
+                        let attr = config_data[j + 3];
+                        if addr & 0x80 != 0 && attr & 0x03 == ep_type::INTERRUPT {
+                            result.push((iface, EndpointDesc {
+                                length: config_data[j],
+                                desc_type: desc_type::ENDPOINT,
+                                endpoint_address: addr,
+                                attributes: attr,
+                                max_packet_size: u16::from_le_bytes([config_data[j + 4], config_data[j + 5]]),
+                                interval: config_data[j + 6],
+                            }));
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
     }
 
     result
