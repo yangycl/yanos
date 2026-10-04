@@ -48,14 +48,29 @@ fn partition_base(sector: &[u8; 512]) -> u32 {
     if sector[0] == 0xEB || sector[0] == 0xE9 {
         return 0;
     }
-    let part = &sector[0x1BE..0x1CE];
-    if part[0] != 0x80 && part[0] != 0x00 {
-        return 0;
+    let mut fallback = 0u32;
+    for i in 0..4 {
+        let part = &sector[0x1BE + i * 16..0x1BE + (i + 1) * 16];
+        if part[0] != 0x80 && part[0] != 0x00 {
+            continue;
+        }
+        let kind = part[4];
+        if kind == 0 {
+            continue;
+        }
+        let lba = u32::from_le_bytes([part[8], part[9], part[10], part[11]]);
+        if lba == 0 {
+            continue;
+        }
+        // 0x0B/0x0C FAT32，0x0E/0x06 FAT16，0x07 NTFS/exFAT 也先交給簽名判斷。
+        if matches!(kind, 0x01 | 0x04 | 0x06 | 0x0B | 0x0C | 0x0E | 0x07) {
+            return lba;
+        }
+        if fallback == 0 {
+            fallback = lba;
+        }
     }
-    if part[4] == 0 {
-        return 0;
-    }
-    u32::from_le_bytes([part[8], part[9], part[10], part[11]])
+    fallback
 }
 
 impl BlockDevice for UsbDisk {

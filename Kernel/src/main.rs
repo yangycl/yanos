@@ -207,9 +207,13 @@ fn kernel_main(
             }
         }
     }
+    let mut volume = "RAM";
     let mut fat32 = if let Some(msc) = crate::usb::take_stick() {
         match UsbDisk::open(msc) {
-            Some(disk) => Fat32::mount(BootDisk::Usb(disk)),
+            Some(disk) => {
+                volume = "USB";
+                Fat32::mount(BootDisk::Usb(disk))
+            }
             None => Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory))),
         }
     } else {
@@ -244,7 +248,7 @@ fn kernel_main(
                         .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
                         .and_then(|entry| entry.first_cluster)
                         .unwrap_or(fat32.root_cluster);
-                    explorer = explorer::explorer::Explorer::new(cluster);
+                    explorer = explorer::explorer::Explorer::with_volume(cluster, volume);
                     is_explorer_running = true;
                 }
                 _ => {}
@@ -259,7 +263,7 @@ fn kernel_main(
                 .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
                 .and_then(|entry| entry.first_cluster)
                 .unwrap_or(fat32.root_cluster);
-            explorer = explorer::explorer::Explorer::new(cluster);
+            explorer = explorer::explorer::Explorer::with_volume(cluster, volume);
             is_explorer_running = true;
         }
         prev_left = left;

@@ -10,15 +10,21 @@ use crate::fs::fat32::Fat32;
 pub struct Explorer {
     selected: usize,
     cluster: u32,
+    volume: &'static str,
 }
 
 
 impl Explorer {
 
     pub const fn new(cluster: u32) -> Self {
+        Self::with_volume(cluster, "RAM")
+    }
+
+    pub const fn with_volume(cluster: u32, volume: &'static str) -> Self {
         Self {
             selected: 0,
             cluster,
+            volume,
         }
     }
 
@@ -107,7 +113,8 @@ impl Explorer {
         fb::draw_rect(buffer, stride, x0, y0, win_w, 32, [45, 90, 255]);
         fb::draw_string(buffer, stride, x0 + 10, y0 + 8, "YASYS Explorer", [255, 255, 255]);
         fb::draw_rect(buffer, stride, x0, y0 + 32, win_w, 24, [55, 55, 55]);
-        fb::draw_string(buffer, stride, x0 + 10, y0 + 38, "Path: /", [255, 255, 255]);
+        let path = if self.volume == "USB" { "Path: USB:/" } else { "Path: RAM:/" };
+        fb::draw_string(buffer, stride, x0 + 10, y0 + 38, path, [255, 255, 255]);
         fb::draw_rect(buffer, stride, x0, y0 + 56, win_w, 24, [70, 70, 70]);
         fb::draw_string(buffer, stride, x0 + 10, y0 + 62, "Name", [255, 255, 255]);
 
