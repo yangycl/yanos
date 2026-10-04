@@ -15,6 +15,16 @@ Assembler: nasm (if using external assembly entry)
 
 Emulator: qemu-system-i386 / qemu-system-x86_64
 
+### ELF to YEX / ELF 轉換
+
+Repository 內的 `tools/elf2yex` 是獨立的主機端工具，可將受限的 ELF64 x86-64 executable 包裝成 yanos `.yex` 格式：
+
+```bash
+cargo run -p elf2yex -- input.elf [output.yex]
+```
+
+省略輸出路徑時會使用輸入檔名並改成 `.yex` 副檔名。此工具目前只支援單一 executable `PT_LOAD`、無 BSS 的 ELF；它不會轉換 Linux syscall 或載入動態函式庫，因此一般 Linux 執行檔不保證能在 yanos 執行。詳見 [tools/elf2yex/README.md](tools/elf2yex/README.md)。
+
 Quick Start / 快速開始
 ```Bash
 # Clone repository / 複製儲存庫

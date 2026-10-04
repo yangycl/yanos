@@ -1,0 +1,9 @@
+[package]
+name = "elf2yex"
+version = "0.1.0"
+edition = "2024"
+description = "Convert a minimal x86-64 ELF executable into the yanos YEXE format"
+
+[[bin]]
+name = "elf2yex"
+path = "src/main.rs"
