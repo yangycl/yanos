@@ -1,0 +1,13 @@
+YEXE
+
+Offset  Size  Field
+0       4     ASCII YEXE
+4       4     .text length, little-endian byte count
+8       n     assembled machine code
+
+The kernel enters the first byte of the code and accepts only n bytes.
+The entry is extern "C" fn() and must return. n must be non-zero and
+8 + n must not pass the end of the file.
+
+Sample: user/hello.asm
+nasm -f bin user/hello.asm -o HELLO.YEX
