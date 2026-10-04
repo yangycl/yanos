@@ -44,6 +44,7 @@ use crate::fs::file_location::FileLocation;
 use linked_list_allocator::LockedHeap;
 
 mod explorer;
+mod exec;
 mod desktop;
 mod dma;
 mod usb;
@@ -228,6 +229,11 @@ fn kernel_main(
             match ch {
                 'q' => {
                     is_explorer_running = false;
+                }
+                'r' if is_explorer_running => {
+                    if let Some(entry) = explorer.selected_entry(&mut fat32) {
+                        let _ = exec::load_and_run(&mut fat32, entry);
+                    }
                 }
                 'e' => {
                     let cluster = fat32

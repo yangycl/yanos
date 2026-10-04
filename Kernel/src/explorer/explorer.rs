@@ -23,6 +23,30 @@ impl Explorer {
     }
 
 
+    pub fn selected_entry<D: BlockDevice>(
+        &mut self,
+        fat32: &mut Fat32<D>,
+    ) -> Option<DirectoryEntry> {
+        let mut entries = [DirectoryEntry {
+            name: [0u8; 11],
+            attr: 0,
+            first_cluster: None,
+            file_size: 0,
+        }; 32];
+        let count = fat32.read_directory(self.cluster, &mut entries);
+        let mut seen = 0usize;
+        for entry in entries.iter().take(count) {
+            if entry.name[0] == 0x00 || entry.name[0] == 0xE5 || entry.attr == 0x0F {
+                continue;
+            }
+            if seen == self.selected {
+                return Some(*entry);
+            }
+            seen += 1;
+        }
+        None
+    }
+
     pub fn update(
         &mut self,
         event: KeyEvent,
