@@ -5,10 +5,11 @@ use crate::fs::fat32::Fat32;
 const MAX_IMAGE: usize = 64 * 1024;
 static mut IMAGE: [u8; MAX_IMAGE] = [0; MAX_IMAGE];
 
-/// Load a `YEXE` file and call its entry.
+/// Load a `YEXE` file and call its first instruction.
 ///
-/// Layout: `b"YEXE"` , `u32` entry offset from the start of the file, then code.
-/// The entry is `extern "C" fn()`. This runs in kernel mode.
+/// Layout: `b"YEXE"`, little-endian `u32` `.text` length, then the assembled
+/// code. The kernel enters at the first code byte and only accepts `text_len`
+/// bytes after the header. The entry is `extern "C" fn()` and runs in kernel mode.
 pub fn load_and_run<D: BlockDevice>(
     fs: &mut Fat32<D>,
     entry: DirectoryEntry,
@@ -21,11 +22,11 @@ pub fn load_and_run<D: BlockDevice>(
     if n < 8 || &image[..4] != b"YEXE" {
         return Err(());
     }
-    let entry_off = u32::from_le_bytes([image[4], image[5], image[6], image[7]]) as usize;
-    if entry_off >= n {
+    let text_len = u32::from_le_bytes([image[4], image[5], image[6], image[7]]) as usize;
+    if text_len == 0 || 8 + text_len > n {
         return Err(());
     }
-    let code = unsafe { IMAGE.as_ptr().add(entry_off) };
+    let code = unsafe { IMAGE.as_ptr().add(8) };
     let start: extern "C" fn() = unsafe { core::mem::transmute(code) };
     start();
     Ok(())

@@ -1,5 +1,7 @@
-; YEXE: magic, entry offset 8, then a single ret.
+; YEXE: magic, .text length, then code.
 ; nasm -f bin hello.asm -o HELLO.YEX
 db "YEXE"
-dd 8
-ret
+dd text_end - text
+text:
+    ret
+text_end:
