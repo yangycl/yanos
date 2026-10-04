@@ -14,6 +14,11 @@ KERNEL_BIN := target/$(TARGET)/debug/$(KERNEL_PACKAGE)
 OS_IMAGE   := os/nova_os.img
 
 QEMU := qemu-system-x86_64
+OVMF := $(firstword $(wildcard /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/qemu/OVMF.fd /usr/share/OVMF/OVMF_CODE.fd))
+
+ifeq ($(OVMF),)
+$(error No OVMF BIOS found. Install ovmf package or set OVMF=/path/to/OVMF_CODE.fd)
+endif
 
 .PHONY: all setup check kernel image build run clean rebuild \
         toolchain targets
@@ -72,7 +77,7 @@ build: image
 run: image
 	qemu-system-x86_64 \
 	-drive format=raw,file=os/nova_os.img \
-	-bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
+	-bios $(OVMF) \
 	-m 256M \
 	-serial stdio \
 	-display gtk

@@ -2,6 +2,25 @@ use crate::drivers::framebuffer::wordbitmap::FONT_LOWER;
 
 mod wordbitmap;
 
+/// Copy only pixels whose rendered BGRA bytes differ from the visible framebuffer.
+pub fn present_changed_pixels(
+    framebuffer: &mut [u8],
+    rendered: &[u8],
+    width: usize,
+    height: usize,
+) {
+    for pixel in 0..width.saturating_mul(height) {
+        let start = pixel.saturating_mul(4);
+        let end = start.saturating_add(4);
+        if end > framebuffer.len() || end > rendered.len() {
+            break;
+        }
+        if framebuffer[start..end] != rendered[start..end] {
+            framebuffer[start..end].copy_from_slice(&rendered[start..end]);
+        }
+    }
+}
+
 
     fn draw_pixel(
         buffer: &mut [u8],

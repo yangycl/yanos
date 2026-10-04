@@ -32,7 +32,10 @@ impl Desktop {
     pub fn draw(&self, framebuffer: &mut FrameBuffer) {
         let width = framebuffer.info().width as usize;
         let height = framebuffer.info().height as usize;
-        let buffer = framebuffer.buffer_mut();
+        self.draw_to_buffer(framebuffer.buffer_mut(), width, height);
+    }
+
+    pub fn draw_to_buffer(&self, buffer: &mut [u8], width: usize, height: usize) {
 
         fb::draw_rect(buffer, width, 0, 0, width, height, [240, 240, 245]);
 

@@ -227,6 +227,14 @@ pub fn push_usb_report(report: [u8; 8]) {
 }
 
 /// keyboard.rs 使用
+pub fn peek_usb_report() -> Option<[u8; 8]> {
+    let queue = USB_REPORT_QUEUE.lock();
+    if queue.read == queue.write {
+        return None;
+    }
+    Some(queue.buffer[queue.read])
+}
+
 pub fn get_usb_report() -> Option<[u8; 8]> {
     USB_REPORT_QUEUE.lock().pop()
 }

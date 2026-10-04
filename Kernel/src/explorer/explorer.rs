@@ -107,7 +107,27 @@ impl Explorer {
         win_h: usize,
     ) {
         let stride = framebuffer.info().width as usize;
-        let buffer = framebuffer.buffer_mut();
+        self.draw_window_to_buffer(
+            framebuffer.buffer_mut(),
+            fat32,
+            stride,
+            x0,
+            y0,
+            win_w,
+            win_h,
+        );
+    }
+
+    pub fn draw_window_to_buffer<D: BlockDevice>(
+        &self,
+        buffer: &mut [u8],
+        fat32: &mut Fat32<D>,
+        stride: usize,
+        x0: usize,
+        y0: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
 
         fb::draw_rect(buffer, stride, x0, y0, win_w, win_h, [35, 35, 35]);
         fb::draw_rect(buffer, stride, x0, y0, win_w, 32, [45, 90, 255]);

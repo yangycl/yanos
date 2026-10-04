@@ -77,7 +77,7 @@ struct Mouse {
 
 
 
-const HEAP_SIZE: usize = 1024 * 1024; // 1MB Heap
+const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16MB heap, including a 1080p back buffer
 
 #[repr(C, align(4096))]
 struct HeapSpace([u8; HEAP_SIZE]);
@@ -222,7 +222,12 @@ fn kernel_main(
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
     let desktop = desktop::desktop::Desktop::new();
+    let mut back_buffer = alloc::vec::Vec::new();
+    if let Some(framebuffer) = boot_info.framebuffer.as_ref() {
+        back_buffer.extend_from_slice(framebuffer.buffer());
+    }
     let mut prev_left = false;
+    let mut redraw = true;
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -231,30 +236,15 @@ fn kernel_main(
             keyboard_state.update(event);
             if is_explorer_running {
                 explorer.update(event);
-            }
-        }
-        if let Some(ch) = drivers::keyboard::read_char() {
-            match ch {
-                'q' => {
-                    is_explorer_running = false;
+                if matches!(event, KeyEvent::UpPress | KeyEvent::DownPress) {
+                    redraw = true;
                 }
-                'r' if is_explorer_running => {
-                    if let Some(entry) = explorer.selected_entry(&mut fat32) {
-                        let _ = exec::load_and_run(&mut fat32, entry);
-                    }
-                }
-                'e' | 'E' => {
-                    let cluster = fat32
-                        .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
-                        .and_then(|entry| entry.first_cluster)
-                        .unwrap_or(fat32.root_cluster);
-                    explorer = explorer::explorer::Explorer::with_volume(cluster, volume);
-                    is_explorer_running = true;
-                }
-                _ => {}
             }
         }
         let (dx, dy, buttons) = crate::usb::take_mouse();
+        if dx != 0 || dy != 0 {
+            redraw = true;
+        }
         mouse.x += dx;
         mouse.y += dy;
         let left = buttons & 1 != 0;
@@ -265,8 +255,35 @@ fn kernel_main(
                 .unwrap_or(fat32.root_cluster);
             explorer = explorer::explorer::Explorer::with_volume(cluster, volume);
             is_explorer_running = true;
+            redraw = true;
         }
         prev_left = left;
+        while let Some(ch) = drivers::keyboard::read_char() {
+            match ch {
+                'q' => {
+                    if is_explorer_running {
+                        is_explorer_running = false;
+                        redraw = true;
+                    }
+                }
+                'r' if is_explorer_running => {
+                    if let Some(entry) = explorer.selected_entry(&mut fat32) {
+                        let _ = exec::load_and_run(&mut fat32, entry);
+                    }
+                    redraw = true;
+                }
+                'e' | 'E' => {
+                    let cluster = fat32
+                        .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
+                        .and_then(|entry| entry.first_cluster)
+                        .unwrap_or(fat32.root_cluster);
+                    explorer = explorer::explorer::Explorer::with_volume(cluster, volume);
+                    is_explorer_running = true;
+                    redraw = true;
+                }
+                _ => {}
+            }
+        }
         if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
             let width = framebuffer.info().width as i32;
             let height = framebuffer.info().height as i32;
@@ -282,17 +299,32 @@ fn kernel_main(
             if mouse.y >= height {
                 mouse.y = height.saturating_sub(1);
             }
-            desktop.draw(framebuffer);
-            if is_explorer_running {
+            if redraw {
                 let width = framebuffer.info().width as usize;
                 let height = framebuffer.info().height as usize;
-                let win_w = 420.min(width.saturating_sub(80));
-                let win_h = 360.min(height.saturating_sub(80));
-                explorer.draw_window(framebuffer, &mut fat32, 40, 80, win_w, win_h);
+                desktop.draw_to_buffer(&mut back_buffer, width, height);
+                if is_explorer_running {
+                    let win_w = 420.min(width.saturating_sub(80));
+                    let win_h = 360.min(height.saturating_sub(80));
+                    explorer.draw_window_to_buffer(
+                        &mut back_buffer,
+                        &mut fat32,
+                        width,
+                        40,
+                        80,
+                        win_w,
+                        win_h,
+                    );
+                }
+                draw_cursor(&mut back_buffer, width, mouse.x, mouse.y);
+                drivers::framebuffer::present_changed_pixels(
+                    framebuffer.buffer_mut(),
+                    &back_buffer,
+                    width,
+                    height,
+                );
+                redraw = false;
             }
-            let width = framebuffer.info().width as usize;
-            let buffer = framebuffer.buffer_mut();
-            draw_cursor(buffer, width, mouse.x, mouse.y);
         }
         x86_64::instructions::hlt();
     }
