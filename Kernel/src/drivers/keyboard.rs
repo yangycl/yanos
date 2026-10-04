@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 static SHIFT_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CAPS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LAST_CHAR: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 // ---------------------------------------------------------------------------
 // Direction keys (Explorer / mouse simulation) — still from PS/2 extended
@@ -421,7 +422,12 @@ fn read_char_ps2() -> Option<char> {
 /// 非阻塞：先 USB，再 PS/2
 pub fn read_char() -> Option<char> {
     if let Some(c) = read_char_usb() {
+        LAST_CHAR.store(0, Ordering::Relaxed);
         return Some(c);
+    }
+    let latched = LAST_CHAR.swap(0, Ordering::Relaxed);
+    if latched != 0 {
+        return Some(latched as char);
     }
     read_char_ps2()
 }
@@ -439,6 +445,16 @@ pub fn push_keyboard_report(report: &KeyboardReport) {
     raw[1] = report.reserved;
     raw[2..8].copy_from_slice(&report.keys);
     interrupts::push_usb_report(raw);
+    let shift = (report.modifiers & 0x22) != 0;
+    for usage in report.keys {
+        if usage == 0 {
+            continue;
+        }
+        if let Some(ch) = hid_usage_to_char(usage, shift, CAPS_ACTIVE.load(Ordering::Relaxed)) {
+            LAST_CHAR.store(ch as u8, Ordering::Relaxed);
+            break;
+        }
+    }
 }
 /// 筆電內建鍵盤多半在 EC 的 i8042，不是 xHCI。
 /// 沒送 0xAE / 0xF4，IRQ1 不會響。

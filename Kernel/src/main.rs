@@ -151,7 +151,7 @@ fn kernel_main(
         let width = framebuffer.info().width as usize;
         let height = framebuffer.info().height as usize;
         let buffer = framebuffer.buffer_mut();
-        draw_rect(buffer, width, 0, 0, width, height, [255, 255, 255]);
+        desktop::desktop::Desktop::new().draw(framebuffer);
     }
     let mut mouse = Mouse{
         x : 600,
@@ -182,11 +182,13 @@ fn kernel_main(
     fat[4..8].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
     fat[8..12].copy_from_slice(&3u32.to_le_bytes());
     fat[12..16].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
-    memory[1024] = b'A';
-    memory[1025] = b'B';
-    memory[1026] = b'C';
-    memory[1536] = b'D';
-    memory[1537] = b'E';
+    // 根目錄在 cluster 2（sector 2）。要是 32-byte 目錄項，不能只塞三個字母。
+    let ent = &mut memory[1024..1056];
+    ent[0..11].copy_from_slice(b"README  TXT");
+    ent[11] = 0x20;
+    ent[26..28].copy_from_slice(&3u16.to_le_bytes());
+    ent[28..32].copy_from_slice(&5u32.to_le_bytes());
+    memory[1536..1541].copy_from_slice(b"hello");
     enum BootDisk<'a> {
         Ram(RamDisk<'a>),
         Usb(UsbDisk),
@@ -215,6 +217,8 @@ fn kernel_main(
     };
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
+    let desktop = desktop::desktop::Desktop::new();
+    let mut prev_left = false;
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -235,7 +239,7 @@ fn kernel_main(
                         let _ = exec::load_and_run(&mut fat32, entry);
                     }
                 }
-                'e' => {
+                'e' | 'E' => {
                     let cluster = fat32
                         .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
                         .and_then(|entry| entry.first_cluster)
@@ -246,9 +250,19 @@ fn kernel_main(
                 _ => {}
             }
         }
-        let (dx, dy, _buttons) = crate::usb::take_mouse();
+        let (dx, dy, buttons) = crate::usb::take_mouse();
         mouse.x += dx;
         mouse.y += dy;
+        let left = buttons & 1 != 0;
+        if left && !prev_left && desktop.hit_explorer(mouse.x, mouse.y) {
+            let cluster = fat32
+                .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
+                .and_then(|entry| entry.first_cluster)
+                .unwrap_or(fat32.root_cluster);
+            explorer = explorer::explorer::Explorer::new(cluster);
+            is_explorer_running = true;
+        }
+        prev_left = left;
         if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
             let width = framebuffer.info().width as i32;
             let height = framebuffer.info().height as i32;
@@ -264,6 +278,7 @@ fn kernel_main(
             if mouse.y >= height {
                 mouse.y = height.saturating_sub(1);
             }
+            desktop.draw(framebuffer);
             if is_explorer_running {
                 let width = framebuffer.info().width as usize;
                 let height = framebuffer.info().height as usize;

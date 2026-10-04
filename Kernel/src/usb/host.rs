@@ -186,6 +186,7 @@ fn init_one(bar0: usize) -> bool {
                 continue;
             }
             let _ = hid.set_protocol(0);
+            let _ = hid.set_idle(0, 0);
             let _ = hid.queue_read();
             *KEYBOARD.lock() = Some(hid);
             *STATUS.lock() = "HID KBD OK";

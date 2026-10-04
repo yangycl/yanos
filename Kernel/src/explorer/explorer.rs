@@ -107,7 +107,7 @@ impl Explorer {
         fb::draw_rect(buffer, stride, x0, y0, win_w, 32, [45, 90, 255]);
         fb::draw_string(buffer, stride, x0 + 10, y0 + 8, "YASYS Explorer", [255, 255, 255]);
         fb::draw_rect(buffer, stride, x0, y0 + 32, win_w, 24, [55, 55, 55]);
-        fb::draw_string(buffer, stride, x0 + 10, y0 + 38, "Path: /home/desktop", [255, 255, 255]);
+        fb::draw_string(buffer, stride, x0 + 10, y0 + 38, "Path: /", [255, 255, 255]);
         fb::draw_rect(buffer, stride, x0, y0 + 56, win_w, 24, [70, 70, 70]);
         fb::draw_string(buffer, stride, x0 + 10, y0 + 62, "Name", [255, 255, 255]);
 
