@@ -244,6 +244,7 @@ fn kernel_main(
     let mut prev_left = false;
     let mut hold_log = unsafe { DEV_HOLD_LOG };
     let mut redraw = !hold_log;
+    let mut last_key = b'-';
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -276,6 +277,8 @@ fn kernel_main(
         }
         prev_left = left;
         while let Some(ch) = drivers::keyboard::read_char() {
+            last_key = ch as u8;
+            redraw = true;
             match ch {
                 'q' => {
                     if is_explorer_running {
@@ -339,6 +342,21 @@ fn kernel_main(
                     );
                 }
                 draw_cursor(&mut back_buffer, width, mouse.x, mouse.y);
+                let probe = alloc::format!(
+                    "K{} EX{} {},{}",
+                    last_key as char,
+                    is_explorer_running as u8,
+                    mouse.x,
+                    mouse.y
+                );
+                draw_string(
+                    &mut back_buffer,
+                    width,
+                    8,
+                    height.saturating_sub(16),
+                    &probe,
+                    [180, 0, 0],
+                );
                 drivers::framebuffer::present_changed_pixels(
                     framebuffer.buffer_mut(),
                     &back_buffer,
