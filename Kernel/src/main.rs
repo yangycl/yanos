@@ -366,7 +366,10 @@ fn kernel_main(
                 redraw = false;
             }
         }
-        x86_64::instructions::hlt();
+        // xHCI 沒接中斷，hlt 要等 PIT 約 55ms。短按的按下和放開會覆寫同一塊 report，e 就不見。
+        for _ in 0..2_000 {
+            core::hint::spin_loop();
+        }
     }
 }
 
