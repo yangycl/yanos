@@ -222,11 +222,14 @@ fn kernel_main(
     let mut volume = "RAM";
     let mut fat32 = if let Some(msc) = crate::usb::take_stick() {
         match UsbDisk::open(msc) {
-            Some(disk) => {
+            Ok(disk) => {
                 volume = "USB";
                 Fat32::mount(BootDisk::Usb(disk))
             }
-            None => Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory))),
+            Err(why) => {
+                volume = why;
+                Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))
+            }
         }
     } else {
         Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))
