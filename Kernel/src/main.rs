@@ -271,6 +271,7 @@ fn kernel_main(
                 .unwrap_or(fat32.root_cluster);
             explorer = explorer::explorer::Explorer::with_volume(cluster, volume);
             is_explorer_running = true;
+            hold_log = false;
             redraw = true;
         }
         prev_left = left;
@@ -299,6 +300,7 @@ fn kernel_main(
                         .unwrap_or(fat32.root_cluster);
                     explorer = explorer::explorer::Explorer::with_volume(cluster, volume);
                     is_explorer_running = true;
+                    hold_log = false;
                     redraw = true;
                 }
                 _ => {}
