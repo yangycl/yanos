@@ -63,6 +63,7 @@ entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 static mut FRAMEBUFFER:
     Option<*mut bootloader_api::info::FrameBuffer> = None;
+static mut DEV_HOLD_LOG: bool = false;
 
 
 struct Mouse {
@@ -135,9 +136,11 @@ fn kernel_main(
         }
         let _ = usb_ok;
         // PIT 預設約 18.2Hz。91 tick 大約 5 秒，然後清掉開機 LOG。
+        // 桌面還沒蓋上去時按 d，log 留在畫面上。再按一次才 draw。
         let start = crate::arch::x86_64::interrupts::TIMER_TICKS
             .load(core::sync::atomic::Ordering::Relaxed);
         let mut spins = 0u32;
+        let mut hold_log = false;
         while crate::arch::x86_64::interrupts::TIMER_TICKS
             .load(core::sync::atomic::Ordering::Relaxed)
             .wrapping_sub(start)
@@ -145,13 +148,21 @@ fn kernel_main(
             && spins < 80_000_000
         {
             crate::usb::poll();
+            if matches!(drivers::keyboard::read_char(), Some('d') | Some('D')) {
+                hold_log = true;
+                let width = framebuffer.info().width as usize;
+                let buffer = framebuffer.buffer_mut();
+                draw_string(buffer, width, 10, 10, "DEV LOG", [180, 0, 0]);
+            }
             x86_64::instructions::hlt();
             spins += 1;
         }
-        let width = framebuffer.info().width as usize;
-        let height = framebuffer.info().height as usize;
-        let buffer = framebuffer.buffer_mut();
-        desktop::desktop::Desktop::new().draw(framebuffer);
+        if !hold_log {
+            desktop::desktop::Desktop::new().draw(framebuffer);
+        }
+        unsafe {
+            DEV_HOLD_LOG = hold_log;
+        }
     }
     let mut mouse = Mouse{
         x : 600,
@@ -227,7 +238,8 @@ fn kernel_main(
         back_buffer.extend_from_slice(framebuffer.buffer());
     }
     let mut prev_left = false;
-    let mut redraw = true;
+    let mut hold_log = unsafe { DEV_HOLD_LOG };
+    let mut redraw = !hold_log;
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -272,6 +284,10 @@ fn kernel_main(
                     }
                     redraw = true;
                 }
+                'd' | 'D' if hold_log => {
+                    hold_log = false;
+                    redraw = true;
+                }
                 'e' | 'E' => {
                     let cluster = fat32
                         .resolve_path(fat32.root_cluster, desktop::desktop::DESKTOP_PATH)
@@ -299,7 +315,7 @@ fn kernel_main(
             if mouse.y >= height {
                 mouse.y = height.saturating_sub(1);
             }
-            if redraw {
+            if redraw && !hold_log {
                 let width = framebuffer.info().width as usize;
                 let height = framebuffer.info().height as usize;
                 desktop.draw_to_buffer(&mut back_buffer, width, height);
