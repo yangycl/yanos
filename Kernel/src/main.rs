@@ -131,6 +131,7 @@ fn kernel_main(
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
         draw_string(buffer, width, 10, 90, crate::usb::status(), [0, 0, 0]);
+        draw_string(buffer, width, 220, 90, &crate::usb::stick_line(), [180, 0, 0]);
         for (i, line) in crate::usb::log_lines().iter().enumerate() {
             draw_string(buffer, width, 10, 110 + i * 10, line, [0, 0, 0]);
         }

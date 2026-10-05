@@ -17,10 +17,19 @@ static MOUSE_BTN: Mutex<u8> = Mutex::new(0);
 static STICK: Mutex<Option<MscDevice<MyDma>>> = Mutex::new(None);
 static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static STATUS: Mutex<&'static str> = Mutex::new("NO CTRL");
+static STICK_LINE: Mutex<alloc::string::String> = Mutex::new(alloc::string::String::new());
 static LOG: Mutex<alloc::vec::Vec<alloc::string::String>> = Mutex::new(alloc::vec::Vec::new());
 
 pub fn status() -> &'static str {
     *STATUS.lock()
+}
+
+pub fn stick_line() -> alloc::string::String {
+    STICK_LINE.lock().clone()
+}
+
+fn set_stick_line(line: &str) {
+    *STICK_LINE.lock() = alloc::string::String::from(line);
 }
 
 pub fn log_lines() -> alloc::vec::Vec<alloc::string::String> {
@@ -29,7 +38,7 @@ pub fn log_lines() -> alloc::vec::Vec<alloc::string::String> {
 
 fn note(line: alloc::string::String) {
     let mut log = LOG.lock();
-    if log.len() < 24 {
+    if log.len() < 48 {
         log.push(line);
     }
 }
@@ -60,6 +69,9 @@ pub fn init() -> bool {
         if init_one(bar0, dma) {
             any = true;
         }
+    }
+    if STICK.lock().is_none() && STICK_LINE.lock().is_empty() {
+        set_stick_line("NO MSC");
     }
     any
 }
@@ -220,6 +232,13 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
             if let Some(msc) = attach_msc(&dev, &config) {
                 *STICK.lock() = Some(msc);
                 note(alloc::string::String::from("MSC OK"));
+                set_stick_line("MSC OK");
+            } else if !config_has_msc(&config) {
+                let line = alloc::format!("NO MSC {port}");
+                note(line.clone());
+                if STICK.lock().is_none() {
+                    set_stick_line(&line);
+                }
             }
         }
         }
@@ -247,6 +266,17 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
 
 pub fn take_stick() -> Option<MscDevice<MyDma>> {
     STICK.lock().take()
+}
+
+fn config_has_msc(config: &[u8]) -> bool {
+    let mut off = 0;
+    while off + 9 <= config.len() {
+        if config[off] == 9 && config[off + 1] == 4 && config[off + 5] == 8 {
+            return true;
+        }
+        off += 1;
+    }
+    false
 }
 
 fn attach_msc(dev: &Arc<UsbDevice<MyDma>>, config: &[u8]) -> Option<MscDevice<MyDma>> {
@@ -307,12 +337,15 @@ fn attach_msc(dev: &Arc<UsbDevice<MyDma>>, config: &[u8]) -> Option<MscDevice<My
     };
     let (Some(ep_in), Some(ep_out)) = (ep_in, ep_out) else {
         note(alloc::string::String::from("MSC NOEP"));
+        set_stick_line("MSC NOEP");
         return None;
     };
     match MscDevice::from_interface(dev.clone(), &iface, &ep_in, &ep_out) {
         Ok(msc) => Some(msc),
         Err(err) => {
-            note(alloc::format!("MSC {}", err_name(err)));
+            let line = alloc::format!("MSC {}", err_name(err));
+            note(line.clone());
+            set_stick_line(&line);
             None
         }
     }
