@@ -5,7 +5,7 @@ use usb_oxide::{
     trb_type,
 };
 
-use crate::dma::{MyDma, DMA_POOL};
+use crate::dma::MyDma;
 use crate::drivers::keyboard;
 use crate::usb::pci::find_xhci_bars;
 
@@ -48,20 +48,23 @@ pub fn init() -> bool {
         *STATUS.lock() = "NO CTRL";
         return false;
     }
+    crate::dma::reset_cursor();
+    let mut any = false;
     for (i, bar0) in bars.into_iter().take(n).enumerate() {
         note(alloc::format!("BAR{i} {}", hex16(bar0)));
-        if init_one(bar0) {
-            return true;
+        let Some(dma) = crate::dma::take_slice(256 * 1024) else {
+            note(alloc::string::String::from("DMA FULL"));
+            break;
+        };
+        // 找到鍵盤也不能停。隨身碟常常在下一顆 xHCI。
+        if init_one(bar0, dma) {
+            any = true;
         }
     }
-    false
+    any
 }
 
-fn init_one(bar0: usize) -> bool {
-    let dma = unsafe {
-        MyDma::new(DMA_POOL.0.as_ptr() as usize, DMA_POOL.0.len())
-    };
-
+fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
     // 真機 BIOS 還握著 xHCI 時直接 HCRST，SMI 會把機器重開。QEMU 沒這段。
     bios_handoff(bar0);
 
@@ -69,7 +72,9 @@ fn init_one(bar0: usize) -> bool {
         Ok(c) => Arc::new(c),
         Err(_) => {
             note(alloc::string::String::from("CTRL FAIL"));
-            *STATUS.lock() = "CTRL FAIL";
+            if *STATUS.lock() != "HID KBD OK" {
+                *STATUS.lock() = "CTRL FAIL";
+            }
             return false;
         }
     };
@@ -89,9 +94,28 @@ fn init_one(bar0: usize) -> bool {
     let mut saw_dev = false;
     let mut saw_cfg = false;
     let mut saw_hid = false;
-    for port in 0..ctrl.max_ports() {
+    let mut visited = 0u64;
+    for pass in 0..2 {
+        if pass == 1 {
+            if STICK.lock().is_some() {
+                break;
+            }
+            // USB3 隨身碟常常比接收器晚拉起 CCS。第一輪看過的 port 不再 reset。
+            for _ in 0..30 {
+                for _ in 0..1_000_000 {
+                    core::hint::spin_loop();
+                }
+            }
+        }
+        for port in 0..ctrl.max_ports() {
+        if port < 64 && visited & (1 << port) != 0 {
+            continue;
+        }
         if !ctrl.port_connected(port) {
             continue;
+        }
+        if port < 64 {
+            visited |= 1 << port;
         }
         saw_port = true;
         note(alloc::format!("CCS {port}"));
@@ -198,6 +222,7 @@ fn init_one(bar0: usize) -> bool {
                 note(alloc::string::String::from("MSC OK"));
             }
         }
+        }
     }
     let status = if !saw_port {
         "NO PORT"
@@ -277,7 +302,13 @@ fn attach_msc(dev: &Arc<UsbDevice<MyDma>>, config: &[u8]) -> Option<MscDevice<My
         }
         off += len;
     }
-    let (iface, ep_in, ep_out) = (iface?, ep_in?, ep_out?);
+    let Some(iface) = iface else {
+        return None;
+    };
+    let (Some(ep_in), Some(ep_out)) = (ep_in, ep_out) else {
+        note(alloc::string::String::from("MSC NOEP"));
+        return None;
+    };
     match MscDevice::from_interface(dev.clone(), &iface, &ep_in, &ep_out) {
         Ok(msc) => Some(msc),
         Err(err) => {

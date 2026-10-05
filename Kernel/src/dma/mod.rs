@@ -59,3 +59,30 @@ impl Dma for MyDma {
 pub struct DmaPool(pub [u8; 1024 * 1024]);
 
 pub static mut DMA_POOL: DmaPool = DmaPool([0; 1024 * 1024]);
+
+static DMA_CURSOR: AtomicUsize = AtomicUsize::new(0);
+
+pub fn reset_cursor() {
+    DMA_CURSOR.store(0, Ordering::Relaxed);
+}
+
+/// 每顆 xHCI 拿一段。第二顆若從池子開頭配，會蓋掉第一顆的 event ring。
+pub fn take_slice(size: usize) -> Option<MyDma> {
+    let pool = unsafe { DMA_POOL.0.as_ptr() as usize };
+    let pool_len = unsafe { DMA_POOL.0.len() };
+    let size = (size + 4095) & !4095;
+    loop {
+        let cur = DMA_CURSOR.load(Ordering::Relaxed);
+        let aligned = (cur + 4095) & !4095;
+        let next = aligned.checked_add(size)?;
+        if next > pool_len {
+            return None;
+        }
+        if DMA_CURSOR
+            .compare_exchange(cur, next, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Some(MyDma::new(pool + aligned, size));
+        }
+    }
+}
