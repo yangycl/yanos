@@ -40,11 +40,10 @@ impl UsbDisk {
             return Err("TUR");
         }
         let cap = dev.read_capacity(0).map_err(|_| "CAP")?;
-        let block_bytes = cap.block_size();
-        if block_bytes != 512 && block_bytes != 4096 {
-            BLOCK_SIZE.store(block_bytes, core::sync::atomic::Ordering::Relaxed);
-            return Err("BSZ");
-        }
+        let reported = cap.block_size();
+        BLOCK_SIZE.store(reported, core::sync::atomic::Ordering::Relaxed);
+        // Windows 這支是 LogicalBytesPerSector 512。容量欄位垃圾時仍用 512 試開機扇區。
+        let block_bytes = if reported == 4096 { 4096 } else { 512 };
         let mut disk = Self {
             dev,
             base: 0,
