@@ -1,7 +1,15 @@
+use core::sync::atomic::AtomicU32;
+
 use usb_oxide::MscDevice;
 
 use crate::dma::MyDma;
 use crate::fs::block::BlockDevice;
+
+static BLOCK_SIZE: AtomicU32 = AtomicU32::new(0);
+
+pub fn last_block_size() -> u32 {
+    BLOCK_SIZE.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 /// xHCI Bulk-Only 隨身碟。`base` 是 512-byte 扇區編號，Fat32 看到的 sector 0 就是它。
 pub struct UsbDisk {
@@ -34,6 +42,7 @@ impl UsbDisk {
         let cap = dev.read_capacity(0).map_err(|_| "CAP")?;
         let block_bytes = cap.block_size();
         if block_bytes != 512 && block_bytes != 4096 {
+            BLOCK_SIZE.store(block_bytes, core::sync::atomic::Ordering::Relaxed);
             return Err("BSZ");
         }
         let mut disk = Self {
