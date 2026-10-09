@@ -1,13 +1,16 @@
 use lazy_static::lazy_static;
 use spin::Mutex;
-
 use x86_64::structures::idt::{
     InterruptDescriptorTable,
     InterruptStackFrame,
     PageFaultErrorCode,
 };
 
-use crate::arch::x86_64::pic::PICS;
+use crate::drivers::framebuffer::{draw_rect, draw_string};
+use crate::fs::block::BlockDevice;
+use crate::fs::directory::DirectoryEntry;
+use crate::fs::fat32::Fat32;
+use x86_64::VirtAddr;
 
 
 lazy_static! {
@@ -30,12 +33,283 @@ lazy_static! {
         idt.double_fault.set_handler_fn(double_fault_handle);
         idt.page_fault.set_handler_fn(page_falut_handle);
 
+        unsafe {
+            idt[0x80].set_handler_addr(
+                VirtAddr::new(draw_syscall_stub as *const () as u64)
+            );
+        }
 
         idt
     };
 }
 
+use core::ffi::CStr;
 
+use core::arch::global_asm;
+
+#[repr(C)]
+pub struct SyscallRegs {
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rbx: u64,
+    pub rax: u64,
+}
+
+const MAX_SYSCALL_PATH: usize = 4096;
+const MAX_DIRECTORY_ENTRIES: usize = 128;
+
+#[derive(Clone, Copy)]
+struct SyscallFilesystem {
+    context: *mut (),
+    root_cluster: u32,
+    read_file: unsafe fn(*mut (), u32, &str, *mut u8, usize) -> usize,
+    list_directory: unsafe fn(*mut (), u32, &str, *mut u8, usize) -> usize,
+}
+
+static mut SYSCALL_FILESYSTEM: Option<SyscallFilesystem> = None;
+
+/// Register the mounted volume so int 0x80 handlers can use the existing FAT32 APIs.
+pub fn register_syscall_filesystem<D: BlockDevice>(filesystem: &mut Fat32<D>) {
+    unsafe {
+        SYSCALL_FILESYSTEM = Some(SyscallFilesystem {
+            context: filesystem as *mut Fat32<D> as *mut (),
+            root_cluster: filesystem.root_cluster,
+            read_file: syscall_read_file::<D>,
+            list_directory: syscall_list_directory::<D>,
+        });
+    }
+}
+
+unsafe fn syscall_read_file<D: BlockDevice>(
+    context: *mut (),
+    root_cluster: u32,
+    path: &str,
+    destination: *mut u8,
+    capacity: usize,
+) -> usize {
+    if destination.is_null() || capacity == 0 {
+        return 0;
+    }
+    let filesystem = unsafe { &mut *context.cast::<Fat32<D>>() };
+    let Some(mut file) = crate::fs::file::File::open(filesystem, root_cluster, path) else {
+        return 0;
+    };
+
+    let mut copied = 0;
+    let mut buffer = [0u8; 512];
+    while copied < capacity {
+        let count = file.read(&mut buffer).min(capacity - copied);
+        if count == 0 {
+            break;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(buffer.as_ptr(), destination.add(copied), count);
+        }
+        copied += count;
+    }
+    copied
+}
+
+unsafe fn syscall_list_directory<D: BlockDevice>(
+    context: *mut (),
+    root_cluster: u32,
+    path: &str,
+    destination: *mut u8,
+    capacity: usize,
+) -> usize {
+    if destination.is_null() || capacity < 32 {
+        return 0;
+    }
+    let filesystem = unsafe { &mut *context.cast::<Fat32<D>>() };
+    let directory_cluster = if path.is_empty() || path == "/" {
+        root_cluster
+    } else {
+        let Some(entry) = filesystem.resolve_path(root_cluster, path) else {
+            return 0;
+        };
+        if entry.attr & 0x10 == 0 {
+            return 0;
+        }
+        let Some(cluster) = entry.first_cluster else {
+            return 0;
+        };
+        cluster
+    };
+
+    let max_entries = (capacity / 32).min(MAX_DIRECTORY_ENTRIES);
+    let mut entries = [DirectoryEntry::default(); MAX_DIRECTORY_ENTRIES];
+    let count = filesystem.read_directory(directory_cluster, &mut entries[..max_entries]);
+    for (index, entry) in entries[..count].iter().enumerate() {
+        let raw = entry.to_bytes();
+        unsafe {
+            core::ptr::copy_nonoverlapping(raw.as_ptr(), destination.add(index * 32), 32);
+        }
+    }
+    count
+}
+
+unsafe extern "C" {
+    fn draw_syscall_stub();
+}
+
+global_asm!(
+    r#"
+    .global draw_syscall_stub
+draw_syscall_stub:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov rdi, rsp
+    mov rbx, rsp
+    and rsp, -16
+    sub rsp, 16
+    mov [rsp], rbx
+    call syscall_dispatch
+    mov rsp, [rsp]
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    iretq
+"#
+);
+
+       
+#[unsafe(no_mangle)]
+pub extern "C" fn syscall_dispatch(regs: *mut SyscallRegs) {
+    let regs = unsafe { &mut *regs };
+
+    match regs.rax {
+        1 => {
+            let Some(framebuffer_ptr) = (unsafe { crate::FRAMEBUFFER }) else {
+                return;
+            };
+            let fb = unsafe { &mut *framebuffer_ptr };
+            let width = fb.info().width as usize;
+            let buffer = fb.buffer_mut();
+
+            draw_rect(
+                buffer,
+                width,
+                regs.rbx as usize,
+                regs.rcx as usize,
+                regs.r8 as usize,
+                regs.r9 as usize,
+                [regs.r10 as u8, regs.r11 as u8, regs.r12 as u8],
+            );
+        }
+        2 => {
+            let Some(framebuffer_ptr) = (unsafe { crate::FRAMEBUFFER }) else {
+                return;
+            };
+            let fb = unsafe { &mut *framebuffer_ptr };
+            let width = fb.info().width as usize;
+            let buffer = fb.buffer_mut();
+
+            let cstr = unsafe { CStr::from_ptr(regs.rbx as *const i8) };
+            let string = cstr.to_str().unwrap_or("[invalid utf-8]");
+
+            draw_string(
+                buffer,
+                width,
+                regs.rcx as usize,
+                regs.rdx as usize,
+                string,
+                [regs.r8 as u8, regs.r9 as u8, regs.r10 as u8],
+            );
+        }
+
+        // keyboard
+        3 => {
+            regs.rax = get_key().unwrap_or(0) as u64;
+        }
+        // rbx=path, rcx=path length, rdx=destination, rsi=destination capacity.
+        4 => {
+            regs.rax = dispatch_filesystem_syscall(regs, false) as u64;
+        }
+        // Writes 32-byte FAT directory entries to the supplied destination.
+        // Returns the number of entries written.
+        5 => {
+            regs.rax = dispatch_filesystem_syscall(regs, true) as u64;
+        }
+        _ => {}
+    }
+}
+
+fn dispatch_filesystem_syscall(regs: &SyscallRegs, list_directory: bool) -> usize {
+    let path_len = regs.rcx as usize;
+    let path_ptr = regs.rbx as *const u8;
+    let destination = regs.rdx as *mut u8;
+    let capacity = regs.rsi as usize;
+    if path_len > MAX_SYSCALL_PATH
+        || (path_len != 0 && path_ptr.is_null())
+        || destination.is_null()
+    {
+        return 0;
+    }
+    let path_bytes = if path_len == 0 {
+        &[][..]
+    } else {
+        unsafe { core::slice::from_raw_parts(path_ptr, path_len) }
+    };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return 0;
+    };
+    let filesystem = unsafe { SYSCALL_FILESYSTEM };
+    let Some(filesystem) = filesystem else {
+        return 0;
+    };
+    unsafe {
+        let operation = if list_directory {
+            filesystem.list_directory
+        } else {
+            filesystem.read_file
+        };
+        operation(
+            filesystem.context,
+            filesystem.root_cluster,
+            path,
+            destination,
+            capacity,
+        )
+    }
+}
 
 pub fn init_idt() {
 

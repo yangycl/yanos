@@ -61,7 +61,7 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
-static mut FRAMEBUFFER:
+pub(crate) static mut FRAMEBUFFER:
     Option<*mut bootloader_api::info::FrameBuffer> = None;
 static mut DEV_HOLD_LOG: bool = false;
 
@@ -234,6 +234,7 @@ fn kernel_main(
     } else {
         Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))
     };
+    interrupts::register_syscall_filesystem(&mut fat32);
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
     let desktop = desktop::desktop::Desktop::new();
