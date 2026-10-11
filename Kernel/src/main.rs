@@ -127,13 +127,14 @@ fn kernel_main(
             None => draw_string(buffer, width, 10, 50, "NO XHCI", [0, 0, 0]),
         }
         draw_string(buffer, width, 10, 70, "USB INIT...", [0, 0, 0]);
+        draw_string(buffer, width, 10, 90, "USB DEBUG:", [0, 0, 0]);
         let usb_ok = crate::usb::init();
         let width = framebuffer.info().width as usize;
         let buffer = framebuffer.buffer_mut();
-        draw_string(buffer, width, 10, 90, crate::usb::status(), [0, 0, 0]);
-        draw_string(buffer, width, 220, 90, &crate::usb::stick_line(), [180, 0, 0]);
+        draw_string(buffer, width, 10, 110, crate::usb::status(), [0, 0, 0]);
+        draw_string(buffer, width, 220, 110, &crate::usb::stick_line(), [180, 0, 0]);
         for (i, line) in crate::usb::log_lines().iter().enumerate() {
-            draw_string(buffer, width, 10, 110 + i * 10, line, [0, 0, 0]);
+            draw_string(buffer, width, 10, 130 + i * 12, line, [0, 0, 0]);
         }
         let _ = usb_ok;
         // PIT 預設約 18.2Hz。91 tick 大約 5 秒，然後清掉開機 LOG。

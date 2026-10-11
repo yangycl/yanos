@@ -50,6 +50,7 @@ fn hex16(v: usize) -> alloc::string::String {
 /// 開機時呼叫一次：每顆 xHCI 都試。接收器可能不在第一顆控制器。
 pub fn init() -> bool {
     LOG.lock().clear();
+    note(alloc::string::String::from("USB START"));
     let mut bars = [0usize; 4];
     let n = find_xhci_bars(&mut bars);
     note(alloc::format!("XHCI N {n}"));
@@ -78,6 +79,7 @@ pub fn init() -> bool {
 
 fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
     // 真機 BIOS 還握著 xHCI 時直接 HCRST，SMI 會把機器重開。QEMU 沒這段。
+    note(alloc::string::String::from("BIOS HANDOFF"));
     bios_handoff(bar0);
 
     let ctrl = match XhciCtrl::new(bar0, dma) {
@@ -131,6 +133,7 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
         }
         saw_port = true;
         note(alloc::format!("CCS {port}"));
+        note(alloc::format!("PORT RESET {port}"));
         // 真機 handoff 後裝置多半還在 Disabled，不 reset 就不會進 Addressed。
         if ctrl.reset_port(port).is_err() {
             note(alloc::format!("RST FAIL {port}"));
@@ -229,6 +232,7 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
             break;
         }
         if STICK.lock().is_none() {
+            note(alloc::string::String::from("MSC TRY"));
             if let Some(msc) = attach_msc(&dev, &config) {
                 *STICK.lock() = Some(msc);
                 note(alloc::string::String::from("MSC OK"));
