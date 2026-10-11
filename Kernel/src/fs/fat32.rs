@@ -194,11 +194,20 @@ impl<D: BlockDevice> Fat32<D> {
         cluster: u32,
         buffer: &mut [u8;512],
     ) {
+        self.read_cluster_sector(cluster, 0, buffer);
+    }
 
+    pub fn read_cluster_sector(
+        &mut self,
+        cluster: u32,
+        sector_offset: u8,
+        buffer: &mut [u8;512],
+    ) {
         let sector =
             self.data_start
             + ((cluster - 2)
-            * self.sectors_per_cluster as u32);
+            * self.sectors_per_cluster as u32)
+            + sector_offset as u32;
 
 
         self.device.read_sector(

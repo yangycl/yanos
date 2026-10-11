@@ -125,50 +125,33 @@ impl <D: BlockDevice> Fat32 <D>{
 
         loop {
 
-            let mut buffer =
-                [0u8; 512];
+            for sector_offset in 0..self.sectors_per_cluster {
+                let mut buffer = [0u8; 512];
+                self.read_cluster_sector(cluster, sector_offset, &mut buffer);
 
-            self.read_cluster(
-                cluster,
-                &mut buffer,
-            );
+                for offset in (0..512).step_by(32) {
+                    // 後面沒有 Entry
+                    if buffer[offset] == 0x00 {
+                        return count;
+                    }
 
-            for offset in
-                (0..512).step_by(32)
-            {
+                    // Deleted entries, long-name records, and volume labels are not
+                    // ordinary files/directories and should not consume output slots.
+                    if buffer[offset] == 0xE5
+                        || buffer[offset + 11] == 0x0F
+                        || buffer[offset + 11] & 0x08 != 0
+                    {
+                        continue;
+                    }
 
-                // 後面沒有 Entry
-                if buffer[offset] == 0x00 {
+                    if count == output.len() {
+                        return count;
+                    }
 
-                    return count;
-
+                    let raw: &[u8; 32] = buffer[offset..offset + 32].try_into().unwrap();
+                    output[count] = self.read_dir_struct(raw);
+                    count += 1;
                 }
-
-                // 已刪除
-                if buffer[offset] == 0xE5 {
-
-                    continue;
-
-                }
-
-                if count == output.len() {
-
-                    return count;
-
-                }
-
-                let raw:
-                    &[u8;32] =
-                    buffer[offset
-                        ..offset + 32]
-                        .try_into()
-                        .unwrap();
-
-                output[count] =
-                    self.read_dir_struct(raw);
-
-                count += 1;
-
             }
 
             let next =
