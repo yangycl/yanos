@@ -61,18 +61,23 @@ impl UsbDisk {
             bases[4] = lba;
         }
         let scale = block_bytes / 512;
+        let mut tried = false;
         for dev_lba in bases {
             if dev_lba == 0 {
                 continue;
             }
             let fat_lba = dev_lba.saturating_mul(scale);
+            tried = true;
             if !disk.read_512(fat_lba, &mut sector) {
-                return Err("READ");
+                continue;
             }
             if fat_boot(&sector) {
                 disk.base = fat_lba;
                 return Ok(disk);
             }
+        }
+        if !tried && fat_boot(&sector) {
+            return Ok(disk);
         }
         Err("SIG")
     }
@@ -143,10 +148,11 @@ fn partition_bases(sector: &[u8; 512]) -> [u32; 5] {
     let mut n = 0;
     for i in 0..4 {
         let part = &sector[0x1BE + i * 16..0x1BE + (i + 1) * 16];
+        let typ = part[4];
         if part[0] != 0x80 && part[0] != 0x00 {
             continue;
         }
-        if part[4] == 0 {
+        if typ == 0 || !is_fat_partition_type(typ) {
             continue;
         }
         let lba = u32::from_le_bytes([part[8], part[9], part[10], part[11]]);
@@ -157,6 +163,14 @@ fn partition_bases(sector: &[u8; 512]) -> [u32; 5] {
         n += 1;
     }
     out
+}
+
+fn is_fat_partition_type(typ: u8) -> bool {
+    matches!(
+        typ,
+        0x01 | 0x04 | 0x06 | 0x07 | 0x0B | 0x0C | 0x0E | 0x0F | 0x11 | 0x14 | 0x16 | 0x1B
+            | 0x1C | 0x1E | 0x27 | 0x29 | 0x39 | 0x3C
+    )
 }
 
 impl BlockDevice for UsbDisk {
