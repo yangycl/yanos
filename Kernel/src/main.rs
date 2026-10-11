@@ -193,15 +193,7 @@ fn kernel_main(
     let fat = &mut memory[512..1024];
     fat[0..4].copy_from_slice(&0x0FFFFFF8u32.to_le_bytes());
     fat[4..8].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
-    fat[8..12].copy_from_slice(&3u32.to_le_bytes());
-    fat[12..16].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
-    // 根目錄在 cluster 2（sector 2）。要是 32-byte 目錄項，不能只塞三個字母。
-    let ent = &mut memory[1024..1056];
-    ent[0..11].copy_from_slice(b"README  TXT");
-    ent[11] = 0x20;
-    ent[26..28].copy_from_slice(&3u16.to_le_bytes());
-    ent[28..32].copy_from_slice(&5u32.to_le_bytes());
-    memory[1536..1541].copy_from_slice(b"hello");
+    fat[8..12].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
     enum BootDisk<'a> {
         Ram(RamDisk<'a>),
         Usb(UsbDisk),
@@ -220,20 +212,13 @@ fn kernel_main(
             }
         }
     }
-    let mut volume = "RAM";
-    let mut fat32 = if let Some(msc) = crate::usb::take_stick() {
+    let (volume, mut fat32) = if let Some(msc) = crate::usb::take_stick() {
         match UsbDisk::open(msc) {
-            Ok(disk) => {
-                volume = "USB";
-                Fat32::mount(BootDisk::Usb(disk))
-            }
-            Err(why) => {
-                volume = why;
-                Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))
-            }
+            Ok(disk) => ("USB", Fat32::mount(BootDisk::Usb(disk))),
+            Err(why) => (why, Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))),
         }
     } else {
-        Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))
+        ("NOUSB", Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory))))
     };
     interrupts::register_syscall_filesystem(&mut fat32);
     let mut is_explorer_running = false;
