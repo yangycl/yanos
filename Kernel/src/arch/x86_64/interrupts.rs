@@ -440,20 +440,22 @@ extern "x86-interrupt" fn timer_handler(
 
 pub fn get_key() -> Option<u8>
 {
-    KEYBOARD_QUEUE
-        .lock()
-        .pop()
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        KEYBOARD_QUEUE.lock().pop()
+    })
 }
 
 pub fn peek_key() -> Option<u8>
 {
-    let queue = KEYBOARD_QUEUE.lock();
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let queue = KEYBOARD_QUEUE.lock();
 
-    if queue.read == queue.write {
-        return None;
-    }
+        if queue.read == queue.write {
+            return None;
+        }
 
-    Some(queue.buffer[queue.read])
+        Some(queue.buffer[queue.read])
+    })
 }
 
 
