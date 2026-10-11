@@ -293,6 +293,14 @@ fn kernel_main(
                     }
                     redraw = true;
                 }
+                '\n' if is_explorer_running => {
+                    explorer.open_selected(&mut fat32);
+                    redraw = true;
+                }
+                '\u{8}' if is_explorer_running => {
+                    explorer.go_parent();
+                    redraw = true;
+                }
                 'd' | 'D' if hold_log => {
                     hold_log = false;
                     redraw = true;

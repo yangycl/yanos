@@ -10,6 +10,8 @@ use crate::fs::fat32::Fat32;
 pub struct Explorer {
     selected: usize,
     cluster: u32,
+    cluster_stack: [u32; 16],
+    depth: usize,
     volume: &'static str,
 }
 
@@ -21,9 +23,13 @@ impl Explorer {
     }
 
     pub const fn with_volume(cluster: u32, volume: &'static str) -> Self {
+        let mut cluster_stack = [0; 16];
+        cluster_stack[0] = cluster;
         Self {
             selected: 0,
             cluster,
+            cluster_stack,
+            depth: 1,
             volume,
         }
     }
@@ -38,11 +44,11 @@ impl Explorer {
             attr: 0,
             first_cluster: None,
             file_size: 0,
-        }; 32];
+        }; 128];
         let count = fat32.read_directory(self.cluster, &mut entries);
         let mut seen = 0usize;
         for entry in entries.iter().take(count) {
-            if entry.name[0] == 0x00 || entry.name[0] == 0xE5 || entry.attr == 0x0F {
+            if !is_visible_entry(entry) {
                 continue;
             }
             if seen == self.selected {
@@ -51,6 +57,34 @@ impl Explorer {
             seen += 1;
         }
         None
+    }
+
+    pub fn open_selected<D: BlockDevice>(&mut self, fat32: &mut Fat32<D>) -> bool {
+        let Some(entry) = self.selected_entry(fat32) else {
+            return false;
+        };
+        if entry.attr & 0x10 == 0 || self.depth == self.cluster_stack.len() {
+            return false;
+        }
+        let Some(cluster) = entry.first_cluster else {
+            return false;
+        };
+
+        self.cluster_stack[self.depth] = cluster;
+        self.depth += 1;
+        self.cluster = cluster;
+        self.selected = 0;
+        true
+    }
+
+    pub fn go_parent(&mut self) -> bool {
+        if self.depth <= 1 {
+            return false;
+        }
+        self.depth -= 1;
+        self.cluster = self.cluster_stack[self.depth - 1];
+        self.selected = 0;
+        true
     }
 
     pub fn update(
@@ -71,7 +105,7 @@ impl Explorer {
 
             KeyEvent::DownPress => {
 
-                if self.selected < 5 {
+                if self.selected < 127 {
                     self.selected += 1;
                 }
 
@@ -135,6 +169,7 @@ impl Explorer {
         fb::draw_rect(buffer, stride, x0, y0 + 32, win_w, 24, [55, 55, 55]);
         let path = match self.volume {
             "USB" => "Path: USB:/",
+            "NOUSB" => "USB unavailable: no mass-storage device",
             "TUR" => "Path: USB TUR",
             "CAP" => "Path: USB CAP",
             "BSZ" => "Path: USB BSZ",
@@ -160,7 +195,7 @@ impl Explorer {
             attr: 0,
             first_cluster: None,
             file_size: 0,
-        }; 32];
+        }; 128];
 
         let count = fat32.read_directory(
             self.cluster,
@@ -172,18 +207,10 @@ impl Explorer {
         // ==========================
 
         let mut names =
-            heapless::Vec::<heapless::String<13>, 32>::new();
+            heapless::Vec::<heapless::String<13>, 128>::new();
 
         for entry in entries.iter().take(count) {
-            if entry.name[0] == 0x00 {
-                continue;
-            }
-
-            if entry.name[0] == 0xE5 {
-                continue;
-            }
-
-            if entry.attr == 0x0F {
+            if !is_visible_entry(entry) {
                 continue;
             }
 
@@ -223,12 +250,17 @@ impl Explorer {
         // Draw file list
         // ==========================
 
-        let mut y = y0 + 90;
+        let list_top = y0 + 90;
+        let list_bottom = y0 + win_h.saturating_sub(24);
+        let visible_rows = list_bottom.saturating_sub(list_top) / 20;
+        let first_visible = if visible_rows > 0 {
+            self.selected.saturating_sub(visible_rows - 1)
+        } else {
+            0
+        };
+        let mut y = list_top;
 
-        for (i, file) in names.iter().enumerate() {
-            if y + 20 >= y0 + win_h.saturating_sub(24) {
-                break;
-            }
+        for (i, file) in names.iter().enumerate().skip(first_visible).take(visible_rows) {
 
             if i == self.selected {
                 fb::draw_rect(buffer, stride, x0, y - 2, win_w, 18, [70, 120, 255]);
@@ -257,8 +289,23 @@ impl Explorer {
             stride,
             x0 + 10,
             y0 + win_h.saturating_sub(18),
-            "Explorer",
+            "Enter: open  Backspace: up  R: run",
             [255, 255, 255],
         );
     }
+}
+
+fn is_visible_entry(entry: &DirectoryEntry) -> bool {
+    if entry.name[0] == 0x00
+        || entry.name[0] == 0xE5
+        || entry.attr == 0x0F
+        || entry.attr & 0x08 != 0
+    {
+        return false;
+    }
+
+    // FAT directories contain these navigation records; Explorer manages its own parent stack.
+    !(entry.name[0] == b'.'
+        && (entry.name[1..].iter().all(|&byte| byte == b' ')
+            || (entry.name[1] == b'.' && entry.name[2..].iter().all(|&byte| byte == b' '))))
 }
