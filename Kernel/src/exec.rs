@@ -1,6 +1,7 @@
 use crate::fs::block::BlockDevice;
 use crate::fs::directory::DirectoryEntry;
 use crate::fs::fat32::Fat32;
+use crate::memory::paging;
 
 const MAX_IMAGE: usize = 64 * 1024;
 static mut IMAGE: [u8; MAX_IMAGE] = [0; MAX_IMAGE];
@@ -10,6 +11,9 @@ static mut IMAGE: [u8; MAX_IMAGE] = [0; MAX_IMAGE];
 /// Layout: `b"YEXE"`, little-endian `u32` `.text` length, then the assembled
 /// code. The kernel enters at the first code byte and only accepts `text_len`
 /// bytes after the header. The entry is `extern "C" fn()` and runs in kernel mode.
+///
+/// The image is stored in a static data buffer, so we clear the NX bit on those
+/// pages before jumping (otherwise the first instruction fetch faults).
 pub fn load_and_run<D: BlockDevice>(
     fs: &mut Fat32<D>,
     entry: DirectoryEntry,
@@ -26,6 +30,11 @@ pub fn load_and_run<D: BlockDevice>(
     if text_len == 0 || 8 + text_len > n {
         return Err(());
     }
+
+    // IMAGE lives in .bss → pages are normally NX. Make them executable first.
+    let base = unsafe { IMAGE.as_ptr() as u64 };
+    paging::make_executable(base, n);
+
     let code = unsafe { IMAGE.as_ptr().add(8) };
     let start: extern "C" fn() = unsafe { core::mem::transmute(code) };
     start();
