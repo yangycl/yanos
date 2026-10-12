@@ -2,7 +2,8 @@ ENTRY(_start)
 
 PHDRS
 {
-    image PT_LOAD FLAGS(5);
+    /* 7 = R+W+X; static data lives in the same segment and is written at runtime */
+    image PT_LOAD FLAGS(7);
 }
 
 SECTIONS
