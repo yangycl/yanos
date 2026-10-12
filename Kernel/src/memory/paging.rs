@@ -9,6 +9,7 @@ const WRITABLE: u64 = 1 << 1;
 const PCD: u64 = 1 << 4;
 const PWT: u64 = 1 << 3;
 const PS: u64 = 1 << 7;
+const NX: u64 = 1 << 63;
 const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 const PAGE: u64 = 4096;
 
@@ -216,6 +217,60 @@ fn walk(virt: u64) -> Option<u64> {
             table_phys = entry & ADDR_MASK;
         } else {
             return Some((entry & ADDR_MASK) | (virt & 0xFFF));
+        }
+    }
+    None
+}
+
+/// Clear the NX bit on every leaf page covering `[virt, virt + size)`.
+/// Needed so code loaded into a data/bss buffer can be executed.
+/// Handles 4K, 2M and 1G pages used by the bootloader.
+pub fn make_executable(virt: u64, size: usize) {
+    if size == 0 {
+        return;
+    }
+    let end = virt.saturating_add(size as u64);
+    let mut addr = virt & !(PAGE - 1);
+    while addr < end {
+        let step = clear_nx_at(addr).unwrap_or(PAGE);
+        x86_64::instructions::tlb::flush(VirtAddr::new(addr));
+        addr = addr.saturating_add(step);
+    }
+}
+
+/// Clear NX on the leaf entry that covers `virt`.
+/// Returns the size of the page that was modified (4K / 2M / 1G).
+fn clear_nx_at(virt: u64) -> Option<u64> {
+    let mut table_phys = Cr3::read().0.start_address().as_u64();
+    for level in 0..4 {
+        let table = (table_phys + phys_offset()) as *mut u64;
+        let idx = index(virt, level);
+        let entry = unsafe { core::ptr::read_volatile(table.add(idx)) };
+        if entry & PRESENT == 0 {
+            return None;
+        }
+        // 1G page (PDPT)
+        if level == 1 && entry & PS != 0 {
+            let new_entry = entry & !NX;
+            unsafe { core::ptr::write_volatile(table.add(idx), new_entry) };
+            return Some(1 << 30);
+        }
+        // 2M page (PD)
+        if level == 2 && entry & PS != 0 {
+            let new_entry = entry & !NX;
+            unsafe { core::ptr::write_volatile(table.add(idx), new_entry) };
+            return Some(1 << 21);
+        }
+        if level < 3 {
+            if entry & PS != 0 {
+                return None;
+            }
+            table_phys = entry & ADDR_MASK;
+        } else {
+            // 4K leaf
+            let new_entry = entry & !NX;
+            unsafe { core::ptr::write_volatile(table.add(idx), new_entry) };
+            return Some(PAGE);
         }
     }
     None
