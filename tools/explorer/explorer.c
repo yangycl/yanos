@@ -8,6 +8,16 @@ typedef unsigned long usize;
 #define PATH_CAPACITY 128
 #define ROWS 12
 
+/* Keep large buffers out of the kernel stack — running YEX on the kernel
+ * stack with ~1.5KB of locals easily overflows and double-faults on return
+ * from int 0x80. Non-zero init forces .data (BSS is discarded by linker /
+ * rejected by elf2yex). Zeroed once at startup. */
+static u8 g_entries[MAX_ENTRIES * ENTRY_SIZE] = {1};
+static u8 g_visible[MAX_ENTRIES] = {1};
+static char g_path[PATH_CAPACITY] = {1};
+static char g_contents[513] = {1};
+static char g_full_path[PATH_CAPACITY] = {1};
+
 static usize string_length(const char *text) {
     usize length = 0;
     while (text[length] != '\0') {
@@ -152,20 +162,35 @@ static void parent_directory(char *path) {
 }
 
 void explorer_main(void) {
-    u8 entries[MAX_ENTRIES * ENTRY_SIZE];
-    u8 visible[MAX_ENTRIES];
-    char path[PATH_CAPACITY] = "";
     int selected = 0;
     int extended_key = 0;
+    usize i;
+
+    /* Clear the forced non-zero .data markers. */
+    for (i = 0; i < sizeof(g_entries); ++i) {
+        g_entries[i] = 0;
+    }
+    for (i = 0; i < sizeof(g_visible); ++i) {
+        g_visible[i] = 0;
+    }
+    for (i = 0; i < sizeof(g_path); ++i) {
+        g_path[i] = 0;
+    }
+    for (i = 0; i < sizeof(g_contents); ++i) {
+        g_contents[i] = 0;
+    }
+    for (i = 0; i < sizeof(g_full_path); ++i) {
+        g_full_path[i] = 0;
+    }
 
     for (;;) {
-        int count = read_entries(path, entries, visible);
+        int count = read_entries(g_path, g_entries, g_visible);
         if (count == 0) {
             selected = 0;
         } else if (selected >= count) {
             selected = count - 1;
         }
-        draw_directory(path, entries, visible, count, selected);
+        draw_directory(g_path, g_entries, g_visible, count, selected);
 
         usize key = yanos_get_key();
         if (key == 0) {
@@ -185,43 +210,41 @@ void explorer_main(void) {
         } else if (key == 0x01) {
             return;
         } else if (key == 0x0E) {
-            parent_directory(path);
+            parent_directory(g_path);
             selected = 0;
         } else if (key == 0x1C && count > 0) {
-            const u8 *entry = entries + (usize)visible[selected] * ENTRY_SIZE;
+            const u8 *entry = g_entries + (usize)g_visible[selected] * ENTRY_SIZE;
             char name[13];
             make_entry_name(entry, name);
             if ((entry[11] & 0x10) != 0) {
-                usize length = string_length(path);
+                usize length = string_length(g_path);
                 usize name_length = string_length(name);
                 usize needed = length + (length != 0) + name_length + 1;
                 if (needed <= PATH_CAPACITY) {
                     if (length != 0) {
-                        path[length++] = '/';
+                        g_path[length++] = '/';
                     }
-                    copy_text(path + length, name, name_length + 1);
+                    copy_text(g_path + length, name, name_length + 1);
                     selected = 0;
                 }
             } else {
-                char contents[513];
-                usize length = string_length(path);
-                char full_path[PATH_CAPACITY];
+                usize length = string_length(g_path);
                 if (length + (length != 0) + string_length(name) + 1 <= PATH_CAPACITY) {
-                    copy_text(full_path, path, length);
+                    copy_text(g_full_path, g_path, length);
                     if (length != 0) {
-                        full_path[length++] = '/';
+                        g_full_path[length++] = '/';
                     }
-                    copy_text(full_path + length, name, string_length(name) + 1);
-                    usize bytes = yanos_read_file(full_path, string_length(full_path),
-                                                  contents, sizeof(contents) - 1);
-                    contents[bytes] = '\0';
+                    copy_text(g_full_path + length, name, string_length(name) + 1);
+                    usize bytes = yanos_read_file(g_full_path, string_length(g_full_path),
+                                                  g_contents, sizeof(g_contents) - 1);
+                    g_contents[bytes] = '\0';
                     for (usize i = 0; i < bytes; ++i) {
-                        u8 ch = (u8)contents[i];
+                        u8 ch = (u8)g_contents[i];
                         if (ch < 0x20 && ch != '\n' && ch != '\t') {
-                            contents[i] = ' ';
+                            g_contents[i] = ' ';
                         }
                     }
-                    draw_file(name, contents);
+                    draw_file(name, g_contents);
                     for (;;) {
                         key = yanos_get_key();
                         if (key == 0x01 || key == 0x0E) {
