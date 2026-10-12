@@ -382,7 +382,7 @@ impl<H: Dma> MscDevice<H> {
 
         self.device
             .queue_transfer(self.ep_out, false, &cbw_buf, 31)?;
-        self.wait_transfer()?;
+        self.wait_transfer(self.ep_out * 2, 31)?;
 
         // Data phase (if any)
         let transferred = if let (Some(buf), Some(ref mut d)) = (&data_buf, data) {
@@ -390,7 +390,7 @@ impl<H: Dma> MscDevice<H> {
                 // IN: device to host
                 self.device
                     .queue_transfer(self.ep_in, true, buf, data_len)?;
-                let len = self.wait_transfer()?;
+                let len = self.wait_transfer(self.ep_in * 2 + 1, data_len)?;
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         buf.as_ptr::<u8>(),
@@ -406,7 +406,7 @@ impl<H: Dma> MscDevice<H> {
                 }
                 self.device
                     .queue_transfer(self.ep_out, false, buf, data_len)?;
-                self.wait_transfer()?
+                self.wait_transfer(self.ep_out * 2, data_len)?
             }
         } else {
             0
@@ -414,7 +414,7 @@ impl<H: Dma> MscDevice<H> {
 
         // Receive CSW
         self.device.queue_transfer(self.ep_in, true, &csw_buf, 13)?;
-        self.wait_transfer()?;
+        self.wait_transfer(self.ep_in * 2 + 1, 13)?;
 
         let csw = unsafe { *(csw_buf.as_ptr::<Csw>()) };
 
@@ -433,15 +433,18 @@ impl<H: Dma> MscDevice<H> {
         Ok(transferred)
     }
 
-    fn wait_transfer(&self) -> Result<usize> {
+    fn wait_transfer(&self, endpoint_id: u8, requested_len: usize) -> Result<usize> {
         loop {
             if let Some(evt) = self.device.ctrl().poll_event()
                 && evt.slot_id() == self.device.slot_id()
+                && evt.endpoint_id() == endpoint_id
             {
                 let code = evt.completion_code();
                 if code == 1 || code == 13 {
-                    // SUCCESS or SHORT_PACKET
-                    return Ok(evt.transfer_length() as usize);
+                    // Transfer Event reports residual bytes, not bytes transferred.
+                    // Convert that residual count to the actual completed length.
+                    let residual = evt.transfer_length() as usize;
+                    return Ok(requested_len.saturating_sub(residual));
                 } else {
                     return Err(UsbError::XferFail(code));
                 }

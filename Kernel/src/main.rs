@@ -212,11 +212,23 @@ fn kernel_main(
             }
         }
     }
-    let (volume, mut fat32) = if let Some(msc) = crate::usb::take_stick() {
+    let sticks = crate::usb::take_sticks();
+    let had_sticks = !sticks.is_empty();
+    let mut mount_error = "SIG";
+    let mut mounted = None;
+    for msc in sticks {
         match UsbDisk::open(msc) {
-            Ok(disk) => ("USB", Fat32::mount(BootDisk::Usb(disk))),
-            Err(why) => (why, Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory)))),
+            Ok(disk) => {
+                mounted = Some(Fat32::mount(BootDisk::Usb(disk)));
+                break;
+            }
+            Err(why) => mount_error = why,
         }
+    }
+    let (volume, mut fat32) = if let Some(fat32) = mounted {
+        ("USB", fat32)
+    } else if had_sticks {
+        (mount_error, Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory))))
     } else {
         ("NOUSB", Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory))))
     };
@@ -231,7 +243,6 @@ fn kernel_main(
     let mut prev_left = false;
     let mut hold_log = unsafe { DEV_HOLD_LOG };
     let mut redraw = !hold_log;
-    let mut last_key = b'-';
     loop {
         for _ in 0..8 {
             crate::usb::poll();
@@ -264,7 +275,6 @@ fn kernel_main(
         }
         prev_left = left;
         while let Some(ch) = drivers::keyboard::read_char() {
-            last_key = ch as u8;
             redraw = true;
             match ch {
                 'q' => {
@@ -273,7 +283,7 @@ fn kernel_main(
                         redraw = true;
                     }
                 }
-                'r' if is_explorer_running => {
+                'r' | 'R' if is_explorer_running => {
                     if let Some(entry) = explorer.selected_entry(&mut fat32) {
                         let _ = exec::load_and_run(&mut fat32, entry);
                     }
@@ -337,21 +347,6 @@ fn kernel_main(
                     );
                 }
                 draw_cursor(&mut back_buffer, width, mouse.x, mouse.y);
-                let probe = alloc::format!(
-                    "K{} EX{} {},{}",
-                    last_key as char,
-                    is_explorer_running as u8,
-                    mouse.x,
-                    mouse.y
-                );
-                draw_string(
-                    &mut back_buffer,
-                    width,
-                    8,
-                    height.saturating_sub(16),
-                    &probe,
-                    [180, 0, 0],
-                );
                 drivers::framebuffer::present_changed_pixels(
                     framebuffer.buffer_mut(),
                     &back_buffer,

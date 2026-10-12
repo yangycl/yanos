@@ -14,7 +14,9 @@ static MOUSE: Mutex<Option<HidDevice<MyDma>>> = Mutex::new(None);
 static MOUSE_DX: Mutex<i32> = Mutex::new(0);
 static MOUSE_DY: Mutex<i32> = Mutex::new(0);
 static MOUSE_BTN: Mutex<u8> = Mutex::new(0);
-static STICK: Mutex<Option<MscDevice<MyDma>>> = Mutex::new(None);
+const MAX_MSC_DEVICES: usize = 4;
+static STICKS: Mutex<alloc::vec::Vec<MscDevice<MyDma>>> =
+    Mutex::new(alloc::vec::Vec::new());
 static RETRY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static STATUS: Mutex<&'static str> = Mutex::new("NO CTRL");
 static STICK_LINE: Mutex<alloc::string::String> = Mutex::new(alloc::string::String::new());
@@ -50,6 +52,7 @@ fn hex16(v: usize) -> alloc::string::String {
 /// 開機時呼叫一次：每顆 xHCI 都試。接收器可能不在第一顆控制器。
 pub fn init() -> bool {
     LOG.lock().clear();
+    STICKS.lock().clear();
     note(alloc::string::String::from("USB START"));
     let mut bars = [0usize; 4];
     let n = find_xhci_bars(&mut bars);
@@ -71,7 +74,7 @@ pub fn init() -> bool {
             any = true;
         }
     }
-    if STICK.lock().is_none() && STICK_LINE.lock().is_empty() {
+    if STICKS.lock().is_empty() && STICK_LINE.lock().is_empty() {
         set_stick_line("NO MSC");
     }
     any
@@ -111,7 +114,7 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
     let mut visited = 0u64;
     for pass in 0..2 {
         if pass == 1 {
-            if STICK.lock().is_some() {
+            if STICKS.lock().len() >= MAX_MSC_DEVICES {
                 break;
             }
             // USB3 隨身碟常常比接收器晚拉起 CCS。第一輪看過的 port 不再 reset。
@@ -231,16 +234,16 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
             *STATUS.lock() = "HID KBD OK";
             break;
         }
-        if STICK.lock().is_none() {
+        if STICKS.lock().len() < MAX_MSC_DEVICES {
             note(alloc::string::String::from("MSC TRY"));
             if let Some(msc) = attach_msc(&dev, &config) {
-                *STICK.lock() = Some(msc);
+                STICKS.lock().push(msc);
                 note(alloc::string::String::from("MSC OK"));
                 set_stick_line("MSC OK");
             } else if !config_has_msc(&config) {
                 let line = alloc::format!("NO MSC {port}");
                 note(line.clone());
-                if STICK.lock().is_none() {
+                if STICKS.lock().is_empty() {
                     set_stick_line(&line);
                 }
             }
@@ -259,7 +262,7 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
         "MOUSE ONLY"
     };
     // 後面的空控制器不要把前面的 ADDR FAIL 蓋成 NO PORT。
-    if *STATUS.lock() == "HID KBD OK" || MOUSE.lock().is_some() || STICK.lock().is_some() {
+    if *STATUS.lock() == "HID KBD OK" || MOUSE.lock().is_some() || !STICKS.lock().is_empty() {
         return true;
     }
     if saw_port || *STATUS.lock() == "NO CTRL" || *STATUS.lock() == "NO PORT" {
@@ -268,8 +271,8 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
     false
 }
 
-pub fn take_stick() -> Option<MscDevice<MyDma>> {
-    STICK.lock().take()
+pub fn take_sticks() -> alloc::vec::Vec<MscDevice<MyDma>> {
+    core::mem::take(&mut *STICKS.lock())
 }
 
 fn config_has_msc(config: &[u8]) -> bool {

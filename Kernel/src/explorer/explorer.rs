@@ -167,22 +167,12 @@ impl Explorer {
         fb::draw_rect(buffer, stride, x0, y0, win_w, 32, [45, 90, 255]);
         fb::draw_string(buffer, stride, x0 + 10, y0 + 8, "YASYS Explorer", [255, 255, 255]);
         fb::draw_rect(buffer, stride, x0, y0 + 32, win_w, 24, [55, 55, 55]);
-        let path = match self.volume {
-            "USB" => "Path: USB:/",
-            "NOUSB" => "USB unavailable: no mass-storage device",
-            "TUR" => "Path: USB TUR",
-            "CAP" => "Path: USB CAP",
-            "BSZ" => "Path: USB BSZ",
-            "READ" => "Path: USB READ",
-            "SIG" => "Path: USB SIG",
-            _ => "Path: RAM:/",
+        let path = if self.volume == "USB" {
+            "Path: USB:/"
+        } else {
+            "Path: RAM:/"
         };
         fb::draw_string(buffer, stride, x0 + 10, y0 + 38, path, [255, 255, 255]);
-        if self.volume == "BSZ" {
-            let n = crate::fs::usbdisk::last_block_size();
-            let size = alloc::format!("{n}");
-            fb::draw_string(buffer, stride, x0 + 150, y0 + 38, &size, [255, 220, 80]);
-        }
         fb::draw_rect(buffer, stride, x0, y0 + 56, win_w, 24, [70, 70, 70]);
         fb::draw_string(buffer, stride, x0 + 10, y0 + 62, "Name", [255, 255, 255]);
 
@@ -213,7 +203,6 @@ impl Explorer {
             if !is_visible_entry(entry) {
                 continue;
             }
-
             let mut s =
                 heapless::String::<13>::new();
 

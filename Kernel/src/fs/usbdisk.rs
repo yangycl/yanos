@@ -1,15 +1,7 @@
-use core::sync::atomic::AtomicU32;
-
 use usb_oxide::MscDevice;
 
 use crate::dma::MyDma;
 use crate::fs::block::BlockDevice;
-
-static BLOCK_SIZE: AtomicU32 = AtomicU32::new(0);
-
-pub fn last_block_size() -> u32 {
-    BLOCK_SIZE.load(core::sync::atomic::Ordering::Relaxed)
-}
 
 /// xHCI Bulk-Only 隨身碟。`base` 是 512-byte 扇區編號，Fat32 看到的 sector 0 就是它。
 pub struct UsbDisk {
@@ -41,7 +33,6 @@ impl UsbDisk {
         }
         let cap = dev.read_capacity(0).map_err(|_| "CAP")?;
         let reported = cap.block_size();
-        BLOCK_SIZE.store(reported, core::sync::atomic::Ordering::Relaxed);
         // Windows 這支是 LogicalBytesPerSector 512。容量欄位垃圾時仍用 512 試開機扇區。
         let block_bytes = if reported == 4096 { 4096 } else { 512 };
         let mut disk = Self {
@@ -91,19 +82,18 @@ impl UsbDisk {
         let dev_lba = fat_lba / scale;
         let off = ((fat_lba % scale) as usize) * 512;
         if self.block_bytes == 512 {
-            return match self.dev.read_blocks(0, dev_lba, 1, sector) {
-                Ok(n) => n >= 512,
-                Err(_) => false,
-            };
+            let ok = matches!(self.dev.read_blocks(0, dev_lba, 1, sector), Ok(n) if n >= 512);
+            return ok;
         }
         let mut block = [0u8; 4096];
-        match self.dev.read_blocks(0, dev_lba, 1, &mut block) {
+        let ok = match self.dev.read_blocks(0, dev_lba, 1, &mut block) {
             Ok(n) if n >= off + 512 => {
                 sector.copy_from_slice(&block[off..off + 512]);
                 true
             }
             _ => false,
-        }
+        };
+        ok
     }
 
     fn gpt_start(&mut self) -> Option<u32> {
@@ -123,14 +113,26 @@ impl UsbDisk {
             return None;
         }
         let n = count.min(512 / size);
+        let scale = self.block_bytes / 512;
         for i in 0..n {
             let e = &raw[i * size..i * size + 48];
             if e[..16].iter().all(|b| *b == 0) {
                 continue;
             }
             let start = u64::from_le_bytes(e[32..40].try_into().ok()?);
+            // Ignore EFI System partitions; the user's data partition uses the
+            // Microsoft Basic Data type. Ventoy commonly has both.
+            if e[..16] != BASIC_DATA_GUID {
+                continue;
+            }
             if start > 0 && start <= u32::MAX as u64 {
-                return Some(start as u32);
+                let Some(fat_lba) = (start as u32).checked_mul(scale) else {
+                    continue;
+                };
+                let mut boot = [0u8; 512];
+                if self.read_512(fat_lba, &mut boot) && fat_boot(&boot) {
+                    return Some(start as u32);
+                }
             }
         }
         None
@@ -138,10 +140,37 @@ impl UsbDisk {
 }
 
 fn fat_boot(sector: &[u8; 512]) -> bool {
+    let bytes_per_sector = u16::from_le_bytes([sector[11], sector[12]]);
+    let sectors_per_cluster = sector[13];
+    let reserved_sectors = u16::from_le_bytes([sector[14], sector[15]]);
+    let fat_count = sector[16];
+    let root_entry_count = u16::from_le_bytes([sector[17], sector[18]]);
+    let fat_size_16 = u16::from_le_bytes([sector[22], sector[23]]);
+    let total_sectors_16 = u16::from_le_bytes([sector[19], sector[20]]);
+    let total_sectors_32 = u32::from_le_bytes([sector[32], sector[33], sector[34], sector[35]]);
+    let fat_size_32 = u32::from_le_bytes([sector[36], sector[37], sector[38], sector[39]]);
+    let root_cluster = u32::from_le_bytes([sector[44], sector[45], sector[46], sector[47]])
+        & 0x0FFF_FFFF;
+
     sector[510] == 0x55
         && sector[511] == 0xAA
         && (sector[0] == 0xEB || sector[0] == 0xE9)
+        && bytes_per_sector == 512
+        && sectors_per_cluster.is_power_of_two()
+        && sectors_per_cluster <= 128
+        && reserved_sectors > 0
+        && (1..=2).contains(&fat_count)
+        && root_entry_count == 0
+        && fat_size_16 == 0
+        && (total_sectors_16 > 0 || total_sectors_32 > 0)
+        && fat_size_32 > 0
+        && (2..0x0FFF_FFF8).contains(&root_cluster)
 }
+
+const BASIC_DATA_GUID: [u8; 16] = [
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99,
+    0xC7,
+];
 
 fn partition_bases(sector: &[u8; 512]) -> [u32; 5] {
     let mut out = [0u32; 5];

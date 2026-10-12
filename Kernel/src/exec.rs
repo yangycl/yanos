@@ -42,17 +42,22 @@ fn read_file<D: BlockDevice>(
     let mut off = 0usize;
     let mut sector = [0u8; 512];
     while left > 0 && cluster >= 2 && cluster < 0x0FFF_FFF8 {
-        fs.read_cluster(cluster, &mut sector);
-        let n = left.min(512).min(dest.len() - off);
-        dest[off..off + n].copy_from_slice(&sector[..n]);
-        off += n;
-        left -= n;
-        if off == dest.len() {
+        for sector_offset in 0..fs.sectors_per_cluster {
+            fs.read_cluster_sector(cluster, sector_offset, &mut sector);
+            let n = left.min(512).min(dest.len().saturating_sub(off));
+            dest[off..off + n].copy_from_slice(&sector[..n]);
+            off += n;
+            left -= n;
+            if left == 0 || off == dest.len() {
+                break;
+            }
+        }
+        if left == 0 || off == dest.len() {
             break;
         }
         cluster = fs.read_fat_entry(cluster);
     }
-    if off < 8 {
+    if left != 0 || off < 8 {
         return Err(());
     }
     Ok(off)
