@@ -138,13 +138,17 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
         note(alloc::format!("CCS {port}"));
         note(alloc::format!("PORT RESET {port}"));
         // 真機 handoff 後裝置多半還在 Disabled，不 reset 就不會進 Addressed。
+        // 只在這裡 reset 一次；UsbDevice::new 不再二次 reset（Intel 上易 CMD 17）。
         if ctrl.reset_port(port).is_err() {
             note(alloc::format!("RST FAIL {port}"));
             continue;
         }
         let still = ctrl.port_connected(port);
-        note(alloc::format!("AFTER {port} {still}"));
-        if !still {
+        let portsc = ctrl.port_status(port);
+        let speed = ctrl.port_speed(port);
+        let ped = (portsc & usb_oxide::regs::PORTSC_PED) != 0;
+        note(alloc::format!("AFTER {port} ccs={still} ped={ped} spd={speed}"));
+        if !still || !ped || speed == 0 {
             continue;
         }
 

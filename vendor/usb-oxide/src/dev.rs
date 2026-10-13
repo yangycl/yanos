@@ -129,19 +129,28 @@ pub struct UsbDevice<H: Dma> {
 }
 
 impl<H: Dma> UsbDevice<H> {
-    /// Create and address a new USB device
+    /// Create and address a new USB device.
+    ///
+    /// Caller must already have reset the port and confirmed it is still
+    /// connected. Doing another reset here was a common source of xHCI
+    /// completion code 17 (Parameter Error) on Intel host controllers:
+    /// Enable Slot ran before the second reset, then Address Device saw a
+    /// bad/zero speed or an unstable PED state.
     pub fn new(ctrl: Arc<XhciCtrl<H>>, port: u8) -> Result<Self> {
         let host = ctrl.host();
 
-        // Enable slot
-        let slot_id = ctrl.enable_slot()?;
-
-        // Reset port and get speed
-        ctrl.reset_port(port)?;
-        let speed = ctrl.port_speed(port);
-        if speed == 0 {
+        // Port must already be reset and enabled. Speed 0 → Parameter Error 17.
+        let portsc = ctrl.port_status(port);
+        if (portsc & reg::PORTSC_CCS) == 0 {
             return Err(UsbError::InvPort);
         }
+        let speed = ctrl.port_speed(port);
+        if speed == 0 || (portsc & reg::PORTSC_PED) == 0 {
+            return Err(UsbError::InvPort);
+        }
+
+        // Spec-typical order: reset (done by caller) → Enable Slot → Address.
+        let slot_id = ctrl.enable_slot()?;
 
         // CSZ = 0 is 32 bytes per context. A 64-byte layout is a parameter error.
         let ctx = ctrl.context_size();
@@ -163,6 +172,7 @@ impl<H: Dma> UsbDevice<H> {
             reg::SPEED_SUPER => 512,
             _ => 8,
         };
+        // Root Hub Port Number is 1-based in the Slot Context.
         let slot = SlotContext::new(0, speed, 1, port + 1);
         let ep0 = EndpointContext::new(4, max_packet, 0, 0, ep0_ring.phys(host));
         unsafe {
