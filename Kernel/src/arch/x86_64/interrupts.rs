@@ -121,6 +121,16 @@ unsafe fn syscall_read_file<D: BlockDevice>(
     copied
 }
 
+/// Directory listing buffer kept off the kernel stack. A 128-entry array is
+/// several KB; allocating it inside the int 0x80 path overflows the kernel
+/// stack and double-faults on the way back to YEX (`pop r12` after `iretq`).
+static mut DIR_ENTRY_BUF: [DirectoryEntry; MAX_DIRECTORY_ENTRIES] = [DirectoryEntry {
+    name: [0; 11],
+    attr: 0,
+    first_cluster: None,
+    file_size: 0,
+}; MAX_DIRECTORY_ENTRIES];
+
 unsafe fn syscall_list_directory<D: BlockDevice>(
     context: *mut (),
     root_cluster: u32,
@@ -148,8 +158,8 @@ unsafe fn syscall_list_directory<D: BlockDevice>(
     };
 
     let max_entries = (capacity / 32).min(MAX_DIRECTORY_ENTRIES);
-    let mut entries = [DirectoryEntry::default(); MAX_DIRECTORY_ENTRIES];
-    let count = filesystem.read_directory(directory_cluster, &mut entries[..max_entries]);
+    let entries = unsafe { &mut DIR_ENTRY_BUF[..max_entries] };
+    let count = filesystem.read_directory(directory_cluster, entries);
     for (index, entry) in entries[..count].iter().enumerate() {
         let raw = entry.to_bytes();
         unsafe {
@@ -183,13 +193,12 @@ draw_syscall_stub:
     push r14
     push r15
 
+    # After the 5-qword interrupt frame + 15 pushes, rsp is already 16-byte
+    # aligned (SysV ABI). Do not adjust it further or the callee will see a
+    # misaligned stack and may #GP (which becomes a double fault without IST).
+    # rdi points at the saved register block (SyscallRegs).
     mov rdi, rsp
-    mov rbx, rsp
-    and rsp, -16
-    sub rsp, 16
-    mov [rsp], rbx
     call syscall_dispatch
-    mov rsp, [rsp]
 
     pop r15
     pop r14

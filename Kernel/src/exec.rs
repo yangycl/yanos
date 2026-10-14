@@ -4,7 +4,15 @@ use crate::fs::fat32::Fat32;
 use crate::memory::paging;
 
 const MAX_IMAGE: usize = 64 * 1024;
+/// Raw file bytes (header + payload).
 static mut IMAGE: [u8; MAX_IMAGE] = [0; MAX_IMAGE];
+
+/// Executable payload must start 16-byte aligned. YEXE header is 8 bytes, so
+/// jumping to IMAGE+8 makes `movaps` to static `.data` (linked as if base were
+/// 16-aligned) fault with #GP → double fault. Copy payload here instead.
+#[repr(align(16))]
+struct AlignedPayload([u8; MAX_IMAGE]);
+static mut PAYLOAD: AlignedPayload = AlignedPayload([0; MAX_IMAGE]);
 
 /// Load a `YEXE` file and call its first instruction.
 ///
@@ -31,13 +39,16 @@ pub fn load_and_run<D: BlockDevice>(
         return Err(());
     }
 
-    // IMAGE lives in .bss → pages are normally NX. Make them executable first.
-    let base = unsafe { IMAGE.as_ptr() as u64 };
-    paging::make_executable(base, n);
-
-    let code = unsafe { IMAGE.as_ptr().add(8) };
-    let start: extern "C" fn() = unsafe { core::mem::transmute(code) };
-    start();
+    // Copy contiguous payload (code + static data) to a 16-byte-aligned buffer
+    // so RIP-relative `movaps`/`movdqa` match the alignment the compiler assumed.
+    let payload_len = n - 8;
+    unsafe {
+        PAYLOAD.0[..payload_len].copy_from_slice(&IMAGE[8..n]);
+        let base = PAYLOAD.0.as_ptr() as u64;
+        paging::make_executable(base, payload_len);
+        let start: extern "C" fn() = core::mem::transmute(PAYLOAD.0.as_ptr());
+        start();
+    }
     Ok(())
 }
 
