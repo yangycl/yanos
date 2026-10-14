@@ -4,7 +4,7 @@ resolver = "3"
 members = [
     "Kernel",
     "os",
-    "tools/elf2yex",
+    "tools/elf2yex", "tools/installer",
 ]
 
 [profile.dev]

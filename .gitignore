@@ -2,3 +2,4 @@
 *.img
 *.json
 *.log
+kernel.asm

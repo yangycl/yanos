@@ -11,6 +11,17 @@ pub struct UsbDisk {
     block_bytes: u32,
 }
 
+
+/// 標準 UEFI 規範下的 EFI 系統分割區 (ESP) GUID 陣列
+/// 格式對應：c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+const EFI_SYSTEM_PART_GUID: [u8; 16] = [
+    0x28, 0x73, 0x2A, 0xC1, // c12a7328 (Little-Endian)
+    0x1F, 0xF8,             // f81f     (Little-Endian)
+    0xD2, 0x11,             // 11d2     (Little-Endian)
+    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B // 剩餘為 Big-Endian
+];
+
+
 impl UsbDisk {
     /// `Err` 是為什麼沒能當成 FAT 開：`TUR` `CAP` `BSZ` `READ` `SIG`。
     pub fn open(mut dev: MscDevice<MyDma>) -> Result<Self, &'static str> {
@@ -96,6 +107,7 @@ impl UsbDisk {
         ok
     }
 
+
     fn gpt_start(&mut self) -> Option<u32> {
         let mut sector = [0u8; 512];
         let scale = self.block_bytes / 512;
@@ -119,18 +131,25 @@ impl UsbDisk {
             if e[..16].iter().all(|b| *b == 0) {
                 continue;
             }
-            let start = u64::from_le_bytes(e[32..40].try_into().ok()?);
-            // Ignore EFI System partitions; the user's data partition uses the
-            // Microsoft Basic Data type. Ventoy commonly has both.
+            
+            // 🌟 關鍵修正：如果偵測到目前這個分區是 EFI 系統引導區，立刻無情跳過！
+            if e[..16] == EFI_SYSTEM_PART_GUID {
+                continue;
+            }
+
+            // 確保它是合法的普通資料儲存區 (Microsoft Basic Data)
             if e[..16] != BASIC_DATA_GUID {
                 continue;
             }
+
+            let start = u64::from_le_bytes(e[32..40].try_into().ok()?);
             if start > 0 && start <= u32::MAX as u64 {
                 let Some(fat_lba) = (start as u32).checked_mul(scale) else {
                     continue;
                 };
                 let mut boot = [0u8; 512];
                 if self.read_512(fat_lba, &mut boot) && fat_boot(&boot) {
+                    // 自動略過 EFI 區後，第一個撞到的就是合法的普通 FAT32 資料儲存區！
                     return Some(start as u32);
                 }
             }
