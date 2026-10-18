@@ -1,127 +1,312 @@
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write, Seek, SeekFrom};
-use std::path::Path;
-use std::process::Command;
+use fatfs::{FileSystem, FormatVolumeOptions, FsOptions};
+use gpt::disk::LogicalBlockSize;
+use gpt::mbr::ProtectiveMBR;
+use gpt::GptConfig;
+use std::convert::TryFrom;
 use std::env;
+use std::error::Error;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-const TOTAL_IMAGE_SIZE: u64 = 512 * 1024 * 1024; // 總大小 512 MiB
+const TOTAL_IMAGE_SIZE: u64 = 512 * 1024 * 1024;
+const SECTOR_SIZE: u64 = 512;
+const ALIGNMENT_SECTORS: u64 = 2048;
+const EFI_START_LBA: u64 = ALIGNMENT_SECTORS;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn command_output(program: &str, args: &[&str]) -> Result<String, Box<dyn Error>> {
+    let output = Command::new(program).args(args).output()?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "{} 執行失敗：{}",
+            program,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+fn validate_physical_device(device: &Path) -> Result<u64, Box<dyn Error>> {
+    let device_str = device.to_str().ok_or("裝置路徑不是有效的 UTF-8")?;
+
+    if !device.is_absolute() || !device.exists() {
+        return Err("請指定有效的絕對裝置路徑，例如 /dev/sdb".into());
+    }
+
+    let canonical = fs::canonicalize(device)?;
+    if canonical.parent() != Some(Path::new("/dev")) {
+        return Err("裝置必須是 /dev 底下的直接裝置節點".into());
+    }
+
+    let device_type = command_output("lsblk", &["-dnro", "TYPE", device_str])?;
+
+    if device_type != "disk" {
+        return Err(format!("{} 不是整顆磁碟，拒絕寫入", device_str).into());
+    }
+
+    let mountpoints = command_output("lsblk", &["-nrpo", "MOUNTPOINTS", device_str])?;
+
+    if mountpoints.lines().any(|line| !line.trim().is_empty()) {
+        return Err("磁碟或其分區仍有掛載點，請先卸載所有分區後再執行".into());
+    }
+
+    let size_text = command_output("blockdev", &["--getsize64", device_str])?;
+    let size_bytes: u64 = size_text.parse()?;
+
+    if size_bytes < TOTAL_IMAGE_SIZE {
+        return Err(format!(
+            "磁碟容量不足：{} bytes，至少需要 {} bytes",
+            size_bytes, TOTAL_IMAGE_SIZE
+        )
+        .into());
+    }
+
+    println!();
+    println!("⚠️  即將清除這顆磁碟的原有分區表與資料！");
+    println!("裝置：{}", device_str);
+    println!("容量：{} bytes", size_bytes);
+    println!("請確認裝置型號及備份均正確。");
+    print!("若要繼續，請完整輸入 {}：", device_str);
+    io::stdout().flush()?;
+
+    let mut confirmation = String::new();
+    io::stdin().read_line(&mut confirmation)?;
+
+    if confirmation.trim() != device_str {
+        return Err("確認不符，已取消部署".into());
+    }
+
+    Ok(size_bytes)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
     println!("====================================================");
-    println!("   🛡️  Yanos 獨立型專業硬碟發行版部署工具 (v2.5)     ");
+    println!("   Yanos GPT / UEFI 安裝工具 v2.3");
     println!("====================================================");
 
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        println!("❌ 錯誤: 請指定目標隨身碟裝置或映像檔路徑！");
-        println!("   範例: cargo run -p installer -- os/nova_os.img");
-        std::process::exit(1);
-    }
-    let target_dev = &args;
-    println!("🎯 部署目標設備: {}", target_dev);
 
-    let kernel_elf = Path::new("target/x86_64-unknown-none/debug/nova_kernel");
-    if !kernel_elf.exists() {
-        panic!("❌ 錯誤: 找不到 Yanos 核心編譯產物，請先執行 `make rebuild`！");
-    }
+    let (is_device, target_arg) = match args.get(1).map(String::as_str) {
+        Some("--image") => (
+            false,
+            args.get(2)
+                .ok_or("用法：installer --image os/nova_os.img")?,
+        ),
+        Some("--device") => (
+            true,
+            args.get(2).ok_or("用法：installer --device /dev/sdX")?,
+        ),
+        _ => {
+            return Err("請指定 --image os/nova_os.img 或 --device /dev/sdX".into());
+        }
+    };
 
-    // 1. 先讓 bootloader 生成基礎的核心引導分區包（VBR）
-    println!("[1/5] 正在編譯核心 UEFI 系統分區 VBR 數據...");
-    let temp_part_path = "os/nova_boot_part.img";
-    let disk_builder = bootloader::DiskImageBuilder::new(kernel_elf.to_path_buf());
-    disk_builder.create_uefi_image(Path::new(temp_part_path))?; // 取得純 FAT 分區包
+    let target = Path::new(target_arg);
 
-    let part1_size_bytes = File::open(temp_part_path)?.metadata()?.len();
-    let part1_sectors = ((part1_size_bytes + 511) / 512) as u64;
-
-    // 2. 建立全新的空白外殼檔案並擴展容量
-    println!("[2/5] 正在開闢 {}MB 稀疏物理硬碟外殼...", TOTAL_IMAGE_SIZE / 1024 / 1024);
-    {
-        let final_file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(target_dev)?;
-        final_file.set_len(TOTAL_IMAGE_SIZE)?; 
+    if is_device {
+        validate_physical_device(target)?;
+    } else if target.exists() && !target.is_file() {
+        return Err("映像檔模式的目標必須是一般檔案".into());
     }
 
-    // 3. 【神級戰術】：利用 Linux 原生 sfdisk 自動一鍵生成標準 GPT 雙分區
-    println!("[3/5] 正在呼叫 Linux sfdisk 工具全新規劃 GPT 雙分區...");
-    // 腳本意圖：分區1 大小為核心所需磁區、類型為 EFI (C12A7328-F81F-11D2-BA4B-00A0C93EC93B)
-    //          分區2 佔用賸餘全體空間、類型為微軟基本資料 (EBD0A0A2-B9E5-4433-87C0-68B6B72699C7)
-    let sfdisk_script = format!(
-        "label: gpt\n\
-         start=2048, size={}, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=\"Yanos_Boot\"\n\
-         start={}, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, name=\"Yanos_Storage\"\n",
-        part1_sectors,
-        ((2048 + part1_sectors + 2047) / 2048) * 2048 // 儲存區自動對齊 1MB 邊界
+    println!(
+        "部署模式：{}",
+        if is_device {
+            "實體磁碟"
+        } else {
+            "映像檔"
+        }
     );
+    println!("目標：{}", target.display());
 
-    let mut child = Command::new("sudo")
-        .args(["sfdisk", "--force", target_dev])
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
-    
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(sfdisk_script.as_bytes())?;
-    }
-    let status = child.wait()?;
-    if !status.success() {
-        panic!("❌ sfdisk 原生分割失敗！");
+    let kernel = Path::new("target/x86_64-unknown-none/debug/nova_kernel");
+    if !kernel.is_file() {
+        return Err("找不到核心，請先執行 make rebuild".into());
     }
 
-    // 4. 【二進位直接灌入】：從 LBA 0 讀回精確的分割元數據，並把引導包灌入 Partition 1
-    // 標準對齊下，分區1 的物理起始點就是 LBA 2048
-    let part1_start = 2048u64;
-    println!("[4/5] 正在將 UEFI 核心資料直接灌入分區 1 物理扇區 (LBA 2048)...");
-    let mut boot_buffer = Vec::new();
-    File::open(temp_part_path)?.read_to_end(&mut boot_buffer)?;
-    
-    let mut final_file = OpenOptions::new().read(true).write(true).open(target_dev)?;
-    final_file.seek(SeekFrom::Start(part1_start * 512))?; 
-    final_file.write_all(&boot_buffer)?;
-    let _ = std::fs::remove_file(temp_part_path); // 清除臨時文件
+    let explorer = Path::new("tools/explorer/build/EXPLORER.YEX");
+    let temp_part = PathBuf::from("os/nova_boot_part.img");
 
-    // 5. 格式化第二分區並建立 /System/EXPLORER.YEX
-    // 根據對齊動態解出第二分區起始點
-    let part2_start = ((part1_start + part1_sectors + 2047) / 2048) * 2048;
-    let total_sectors = TOTAL_IMAGE_SIZE / 512;
-    let last_usable_lba = total_sectors - 34;
-    let part2_size_bytes = (last_usable_lba - part2_start + 1) * 512;
-    let part2_offset_bytes = part2_start * 512;
+    if let Some(parent) = temp_part.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
-    println!("[5/5] 正在將第二分區初始化為 FAT32 並建立 /System/ 目錄...");
+    println!("[1/5] 建立 UEFI FAT 開機分區...");
+
+    let builder = bootloader::DiskImageBuilder::new(kernel.to_path_buf());
+    builder.create_uefi_fat_partition(&temp_part)?;
+
+    let boot_size = fs::metadata(&temp_part)?.len();
+    let boot_sectors = boot_size.div_ceil(SECTOR_SIZE);
+
+    if boot_size == 0 {
+        return Err("UEFI 分區映像是空的".into());
+    }
+
+    println!("[2/5] 準備目標磁碟...");
+
+    if !is_device {
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+
+        let image = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(target)?;
+
+        image.set_len(TOTAL_IMAGE_SIZE)?;
+        image.sync_all()?;
+    }
+
+    let disk_size = if is_device {
+        command_output(
+            "blockdev",
+            &["--getsize64", target.to_str().ok_or("無效路徑")?],
+        )?
+        .parse::<u64>()?
+    } else {
+        TOTAL_IMAGE_SIZE
+    };
+
+    if disk_size % SECTOR_SIZE != 0 {
+        return Err("磁碟大小不是 512 bytes 的整數倍".into());
+    }
+
+    println!("[3/5] 建立 GPT 雙分區...");
+
     {
-        let mut part2_handle = PartitionSlice::new(
-            OpenOptions::new().read(true).write(true).open(target_dev)?,
-            part2_offset_bytes,
-            part2_size_bytes
+        let mut raw = OpenOptions::new().read(true).write(true).open(target)?;
+        let lb_count = u32::try_from(disk_size / SECTOR_SIZE - 1).unwrap_or(0xFFFF_FFFF);
+        ProtectiveMBR::with_lb_size(lb_count).overwrite_lba0(&mut raw)?;
+        raw.sync_all()?;
+    }
+
+    let mut disk = GptConfig::new()
+        .writable(true)
+        .logical_block_size(LogicalBlockSize::Lb512)
+        .create(target)?;
+
+    let first_usable = disk.header().first_usable;
+    let last_usable = disk.header().last_usable;
+
+    let efi_end = EFI_START_LBA
+        .checked_add(boot_sectors - 1)
+        .ok_or("EFI 分區位置溢位")?;
+
+    let data_start = efi_end
+        .checked_add(ALIGNMENT_SECTORS - 1)
+        .ok_or("資料分區起始位置計算溢位")?
+        .checked_div(ALIGNMENT_SECTORS)
+        .ok_or("對齊計算錯誤")?
+        .checked_mul(ALIGNMENT_SECTORS)
+        .ok_or("資料分區對齊計算溢位")?;
+
+    if EFI_START_LBA < first_usable || efi_end > last_usable {
+        return Err("EFI 分區超出 GPT 可用範圍".into());
+    }
+
+    if data_start > last_usable {
+        return Err("磁碟容量不足，無法建立資料分區".into());
+    }
+
+    let data_sectors = last_usable - data_start + 1;
+
+    disk.add_partition_at(
+        "Yanos_Boot",
+        1,
+        EFI_START_LBA,
+        boot_sectors,
+        gpt::partition_types::EFI,
+        0,
+    )?;
+
+    disk.add_partition_at(
+        "Yanos_Storage",
+        2,
+        data_start,
+        data_sectors,
+        gpt::partition_types::BASIC,
+        0,
+    )?;
+
+    let mut device = disk.write()?;
+    device.sync_all()?;
+
+    println!("EFI：LBA {} - {}", EFI_START_LBA, efi_end);
+    println!("資料：LBA {} - {}", data_start, last_usable);
+
+    println!("[4/5] 寫入 UEFI 開機資料...");
+
+    {
+        let mut src = File::open(&temp_part)?;
+        let mut dst = OpenOptions::new().read(true).write(true).open(target)?;
+
+        dst.seek(SeekFrom::Start(EFI_START_LBA * SECTOR_SIZE))?;
+        io::copy(&mut src, &mut dst)?;
+        dst.sync_all()?;
+    }
+
+    fs::remove_file(&temp_part)?;
+
+    println!("[5/5] 格式化資料分區並部署 Explorer...");
+
+    let data_offset = data_start * SECTOR_SIZE;
+    let data_size = data_sectors * SECTOR_SIZE;
+
+    {
+        let slice = PartitionSlice::new(
+            OpenOptions::new().read(true).write(true).open(target)?,
+            data_offset,
+            data_size,
         );
-        fatfs::format_volume(&mut part2_handle, fatfs::FormatVolumeOptions::new())?;
+
+        fatfs::format_volume(slice, FormatVolumeOptions::new())?;
     }
 
     {
-        let part2_disk = PartitionSlice::new(
-            OpenOptions::new().read(true).write(true).open(target_dev)?,
-            part2_offset_bytes,
-            part2_size_bytes
+        let slice = PartitionSlice::new(
+            OpenOptions::new().read(true).write(true).open(target)?,
+            data_offset,
+            data_size,
         );
-        let fs = fatfs::FileSystem::new(part2_disk, fatfs::FsOptions::new())?;
-        let root_dir = fs.root_dir();
-        let system_dir = root_dir.create_dir("System")?;
 
-        deploy_system_file(&system_dir, "apps/explorer/build/EXPLORER.YEX", "EXPLORER.YEX")?;
+        let filesystem = FileSystem::new(slice, FsOptions::new())?;
+        let root = filesystem.root_dir();
+        let system_dir = root.create_dir("System")?;
+
+        if explorer.is_file() {
+            let mut src = File::open(explorer)?;
+            let mut dest = system_dir.create_file("EXPLORER.YEX")?;
+
+            io::copy(&mut src, &mut dest)?;
+            dest.flush()?;
+
+            println!("已部署 /System/EXPLORER.YEX");
+        } else {
+            println!("警告：找不到 {}，略過 Explorer", explorer.display());
+        }
     }
 
-    println!("\n🎉 [成功] 專業解耦版隨身碟系統部署完全成功！ (v2.5)");
+    if is_device {
+        let _ = Command::new("partprobe").arg(target).status();
+        if let Some(s) = target.to_str() {
+            let _ = Command::new("blockdev").args(["--rereadpt", s]).status();
+        }
+    }
+
+    println!();
+    println!("🎉 Yanos 部署完成！");
     println!("====================================================");
-    Ok(())
-}
 
-fn deploy_system_file(dir: &fatfs::Dir<PartitionSlice>, src_path: &str, dest_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if !Path::new(src_path).exists() { return Ok(()); }
-    let mut src = File::open(src_path)?;
-    let mut buffer = Vec::new();
-    src.read_to_end(&mut buffer)?;
-    let mut dest = dir.create_file(dest_name)?;
-    dest.write_all(&buffer)?;
-    println!("  -> 成功部署: /System/{}", dest_name);
     Ok(())
 }
 
@@ -131,43 +316,68 @@ struct PartitionSlice {
     size: u64,
     cursor: u64,
 }
+
 impl PartitionSlice {
-    fn new(file: File, offset: u64, size: u64) -> Self { Self { file, offset, size, cursor: 0 } }
-}
-impl std::io::Read for PartitionSlice {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let max_read = (self.size - self.cursor) as usize;
-        let to_read = buf.len().min(max_read);
-        if to_read == 0 { return Ok(0); }
-        self.file.seek(SeekFrom::Start(self.offset + self.cursor))?;
-        let bytes_read = self.file.read(&mut buf[..to_read])?;
-        self.cursor += bytes_read as u64;
-        Ok(bytes_read)
-    }
-}
-impl std::io::Write for PartitionSlice {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let max_write = (self.size - self.cursor) as usize;
-        let to_write = buf.len().min(max_write);
-        if to_write == 0 { return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "Partition Full")); }
-        self.file.seek(SeekFrom::Start(self.offset + self.cursor))?;
-        let bytes_written = self.file.write(&buf[..to_write])?;
-        self.cursor += bytes_written as u64;
-        Ok(bytes_written)
-    }
-    fn flush(&mut self) -> std::io::Result<()> { self.file.flush() }
-}
-impl std::io::Seek for PartitionSlice {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let new_cursor = match pos {
-            SeekFrom::Start(offset) => offset as i64,
-            SeekFrom::Current(offset) => self.cursor as i64 + offset,
-            SeekFrom::End(offset) => self.size as i64 + offset,
-        };
-        if new_cursor < 0 || new_cursor > self.size as i64 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid Seek"));
+    fn new(file: File, offset: u64, size: u64) -> Self {
+        Self {
+            file,
+            offset,
+            size,
+            cursor: 0,
         }
-        self.cursor = new_cursor as u64;
+    }
+}
+
+impl Read for PartitionSlice {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.cursor >= self.size {
+            return Ok(0);
+        }
+
+        let count = buf.len().min((self.size - self.cursor) as usize);
+        self.file.seek(SeekFrom::Start(self.offset + self.cursor))?;
+
+        let n = self.file.read(&mut buf[..count])?;
+        self.cursor += n as u64;
+        Ok(n)
+    }
+}
+
+impl Write for PartitionSlice {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.cursor >= self.size {
+            return Err(io::Error::new(io::ErrorKind::WriteZero, "Partition Full"));
+        }
+
+        let count = buf.len().min((self.size - self.cursor) as usize);
+        self.file.seek(SeekFrom::Start(self.offset + self.cursor))?;
+
+        let n = self.file.write(&buf[..count])?;
+        self.cursor += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Seek for PartitionSlice {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let next = match pos {
+            SeekFrom::Start(n) => n as i128,
+            SeekFrom::Current(n) => self.cursor as i128 + n as i128,
+            SeekFrom::End(n) => self.size as i128 + n as i128,
+        };
+
+        if next < 0 || next > self.size as i128 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Seek outside partition",
+            ));
+        }
+
+        self.cursor = next as u64;
         Ok(self.cursor)
     }
 }

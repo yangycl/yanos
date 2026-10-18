@@ -164,6 +164,8 @@ static void parent_directory(char *path) {
 void explorer_main(void) {
     int selected = 0;
     int extended_key = 0;
+    int need_redraw = 1;
+    int count = 0;
     usize i;
 
     /* Clear the forced non-zero .data markers. */
@@ -184,35 +186,56 @@ void explorer_main(void) {
     }
 
     for (;;) {
-        int count = read_entries(g_path, g_entries, g_visible);
-        if (count == 0) {
-            selected = 0;
-        } else if (selected >= count) {
-            selected = count - 1;
+        if (need_redraw) {
+            count = read_entries(g_path, g_entries, g_visible);
+            if (count == 0) {
+                selected = 0;
+            } else if (selected >= count) {
+                selected = count - 1;
+            }
+            draw_directory(g_path, g_entries, g_visible, count, selected);
+            need_redraw = 0;
         }
-        draw_directory(g_path, g_entries, g_visible, count, selected);
 
         usize key = yanos_get_key();
         if (key == 0) {
             continue;
         }
+
+        /* PS/2 set 1: high bit means key release — ignore. */
+        if ((key & 0x80) != 0) {
+            continue;
+        }
+
         if (extended_key) {
             extended_key = 0;
             if (key == 0x48 && selected > 0) {
                 --selected;
+                need_redraw = 1;
             } else if (key == 0x50 && selected + 1 < count) {
                 ++selected;
+                need_redraw = 1;
             }
             continue;
         }
+
         if (key == 0xE0) {
             extended_key = 1;
-        } else if (key == 0x01) {
+            continue;
+        }
+
+        if (key == 0x01) {
             return;
-        } else if (key == 0x0E) {
+        }
+
+        if (key == 0x0E) {
             parent_directory(g_path);
             selected = 0;
-        } else if (key == 0x1C && count > 0) {
+            need_redraw = 1;
+            continue;
+        }
+
+        if (key == 0x1C && count > 0) {
             const u8 *entry = g_entries + (usize)g_visible[selected] * ENTRY_SIZE;
             char name[13];
             make_entry_name(entry, name);
@@ -226,6 +249,7 @@ void explorer_main(void) {
                     }
                     copy_text(g_path + length, name, name_length + 1);
                     selected = 0;
+                    need_redraw = 1;
                 }
             } else {
                 usize length = string_length(g_path);
@@ -238,7 +262,7 @@ void explorer_main(void) {
                     usize bytes = yanos_read_file(g_full_path, string_length(g_full_path),
                                                   g_contents, sizeof(g_contents) - 1);
                     g_contents[bytes] = '\0';
-                    for (usize i = 0; i < bytes; ++i) {
+                    for (i = 0; i < bytes; ++i) {
                         u8 ch = (u8)g_contents[i];
                         if (ch < 0x20 && ch != '\n' && ch != '\t') {
                             g_contents[i] = ' ';
@@ -247,12 +271,20 @@ void explorer_main(void) {
                     draw_file(name, g_contents);
                     for (;;) {
                         key = yanos_get_key();
+                        if (key == 0) {
+                            continue;
+                        }
+                        if ((key & 0x80) != 0) {
+                            continue;
+                        }
                         if (key == 0x01 || key == 0x0E) {
                             break;
                         }
                     }
+                    need_redraw = 1;
                 }
             }
+            continue;
         }
     }
 }

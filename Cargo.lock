@@ -71,7 +71,7 @@ dependencies = [
  "anyhow",
  "bootloader-boot-config",
  "fatfs",
- "gpt",
+ "gpt 3.1.0",
  "llvm-tools",
  "mbrman",
  "serde_json",
@@ -270,6 +270,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpt"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3696fafb1ecdcc2ae3ce337de73e9202806068594b77d22fdf2f3573c5ec2219"
+dependencies = [
+ "bitflags 2.13.1",
+ "crc",
+ "simple-bytes",
+ "uuid",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -318,6 +330,7 @@ version = "0.1.0"
 dependencies = [
  "bootloader",
  "fatfs",
+ "gpt 4.1.0",
 ]
 
 [[package]]
@@ -571,6 +584,12 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "simple-bytes"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c11532d9d241904f095185f35dcdaf930b1427a94d5b01d7002d74ba19b44cc4"
 
 [[package]]
 name = "slab"
