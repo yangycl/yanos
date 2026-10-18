@@ -207,6 +207,10 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
             note(alloc::format!("SETCFG {set_ok}"));
         }
 
+        if looks_like_rndis(&config) {
+            note(alloc::string::String::from("RNDIS YES"));
+        }
+
         let dev = Arc::new(dev);
         let hid_list = find_hid_interfaces(&config);
         note(alloc::format!("HIDN {}", hid_list.len()));
@@ -360,6 +364,36 @@ fn attach_msc(dev: &Arc<UsbDevice<MyDma>>, config: &[u8]) -> Option<MscDevice<My
             None
         }
     }
+}
+
+fn looks_like_rndis(config: &[u8]) -> bool {
+    let mut off = 0;
+    let mut found = false;
+
+    while off + 9 <= config.len() {
+        let len = config[off] as usize;
+        if len < 2 || off + len > config.len() {
+            break;
+        }
+
+        // bDescriptorType 4 = INTERFACE
+        if config[off + 1] == 4 && len >= 9 {
+            let if_num = config[off + 2];
+            let class = config[off + 5];
+            let subclass = config[off + 6];
+            let protocol = config[off + 7];
+
+            // RNDIS: 0xE0 / 0x01 / 0x03
+            if class == 0xE0 && subclass == 0x01 && protocol == 0x03 {
+                note(alloc::format!("RNDIS IF {}", if_num));
+                found = true;
+            }
+        }
+
+        off += len;
+    }
+
+    found
 }
 
 fn err_name(err: UsbError) -> alloc::string::String {
