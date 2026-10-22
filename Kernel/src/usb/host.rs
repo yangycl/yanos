@@ -39,10 +39,8 @@ pub fn log_lines() -> alloc::vec::Vec<alloc::string::String> {
 }
 
 fn note(line: alloc::string::String) {
-    let mut log = LOG.lock();
-    if log.len() < 48 {
-        log.push(line);
-    }
+    // 不設固定行數上限；實際上限由可用 heap 決定。
+    LOG.lock().push(line);
 }
 
 fn hex16(v: usize) -> alloc::string::String {
