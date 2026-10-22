@@ -232,6 +232,32 @@ fn kernel_main(
     } else {
         ("NOUSB", Fat32::mount(BootDisk::Ram(RamDisk::new(&mut memory))))
     };
+    // 將 USB 開機診斷紀錄保存到 system/boot.log。
+    // 先確保 system 目錄存在。
+    let system_name = DirectoryEntry::format_short_name("system");
+    let system_cluster = match fat32.find_entry(fat32.root_cluster, &system_name) {
+        Some(entry) if entry.attr & 0x10 != 0 => entry.first_cluster,
+        _ => fat32.create_directory(fat32.root_cluster, system_name),
+    };
+    if let Some(system_cluster) = system_cluster {
+        let boot_name = DirectoryEntry::format_short_name("boot.log");
+        let boot_entry = DirectoryEntry {
+            name: boot_name,
+            attr: 0x20,
+            first_cluster: None,
+            file_size: 0,
+        };
+        let mut boot_file =
+            File::new_in_directory(&mut fat32, system_cluster, boot_entry);
+
+        // 分隔不同次開機；append 會跨 512-byte 區塊延伸檔案。
+        let _ = boot_file.append(b"\n===== YANOS BOOT LOG =====\n");
+        for line in crate::usb::log_lines().iter() {
+            let _ = boot_file.append(line.as_bytes());
+            let _ = boot_file.append(b"\n");
+        }
+        let _ = boot_file.append(b"===== END BOOT LOG =====\n");
+    }
     interrupts::register_syscall_filesystem(&mut fat32);
     let mut is_explorer_running = false;
     let mut explorer = explorer::explorer::Explorer::new(fat32.root_cluster);
