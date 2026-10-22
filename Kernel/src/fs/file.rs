@@ -119,6 +119,36 @@ impl<'a, D: BlockDevice> File<'a, D> {
     }
 
 
+
+    /// 在指定目錄中開啟或建立檔案。
+    pub fn new_in_directory(
+        fs: &'a mut Fat32<D>,
+        directory_cluster: u32,
+        entry: DirectoryEntry,
+    ) -> Self {
+        let (_found, entry_location) =
+            match fs.find_entry_with_location(directory_cluster, &entry.name) {
+                Some(tuple) => tuple,
+                None => {
+                    let _ = fs.create_entry(directory_cluster, &entry);
+                    fs.find_entry_with_location(directory_cluster, &entry.name)
+                        .expect("entry_not_found_after_create")
+                }
+            };
+
+        let (found, _) = fs
+            .find_entry_with_location(directory_cluster, &entry.name)
+            .expect("entry_not_found_after_create");
+
+        Self {
+            fs,
+            entry: found,
+            position: 0,
+            location: FileLocation::new(found.first_cluster.unwrap_or(0), 0),
+            entry_location,
+        }
+    }
+
     pub fn size(&self) -> u32 {
         self.entry.file_size
     }
