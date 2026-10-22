@@ -60,9 +60,11 @@ impl <D: BlockDevice> Fat32 <D>{
         entry: &DirectoryEntry,
     ) -> Option<u32> {
 
-        // 自動配置第一個 cluster
-        let first_cluster =
-            self.allocate_cluster()?;
+        // 若呼叫端已配置 cluster（例如建立目錄），沿用該 cluster；一般新檔案才配置。
+        let first_cluster = match entry.first_cluster {
+            Some(cluster) => cluster,
+            None => self.allocate_cluster()?,
+        };
 
 
         // 讀整個目錄
