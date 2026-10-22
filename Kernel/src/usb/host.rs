@@ -49,7 +49,7 @@ fn hex16(v: usize) -> alloc::string::String {
 
 /// 開機時呼叫一次：每顆 xHCI 都試。接收器可能不在第一顆控制器。
 pub fn init() -> bool {
-    LOG.lock().clear();
+    // 保留先前初始化嘗試的訊息，避免後續 retry 把早期開機紀錄清掉。
     STICKS.lock().clear();
     note(alloc::string::String::from("USB START"));
     let mut bars = [0usize; 4];
