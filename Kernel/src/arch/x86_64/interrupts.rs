@@ -325,7 +325,7 @@ fn dispatch_xhci_syscall(regs: &SyscallRegs) -> usize {
                 }
                 copied += count;
                 if copied < capacity {
-                    unsafe { destination.add(copied).write(b'\\n'); }
+                    unsafe { destination.add(copied).write(b'\n'); }
                     copied += 1;
                 }
             }
