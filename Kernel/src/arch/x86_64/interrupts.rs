@@ -277,7 +277,61 @@ pub extern "C" fn syscall_dispatch(regs: *mut SyscallRegs) {
         5 => {
             regs.rax = dispatch_filesystem_syscall(regs, true) as u64;
         }
+        // XHCI query API: RBX=operation (0=status, 1=log), RDX=buffer, RSI=capacity.
+        6 => {
+            regs.rax = dispatch_xhci_syscall(regs) as u64;
+        }
         _ => {}
+    }
+}
+
+const MAX_XHCI_SYSCALL_BUFFER: usize = 4096;
+
+/// XHCI syscall 6:
+///   RBX=operation (0=status, 1=log lines), RDX=destination, RSI=capacity.
+/// Returns the number of bytes copied. This query-only API deliberately does
+/// not expose raw MMIO or arbitrary DMA to YEX programs.
+fn dispatch_xhci_syscall(regs: &SyscallRegs) -> usize {
+    let operation = regs.rbx;
+    let destination = regs.rdx as *mut u8;
+    let capacity = (regs.rsi as usize).min(MAX_XHCI_SYSCALL_BUFFER);
+    if destination.is_null() || capacity == 0 {
+        return 0;
+    }
+
+    match operation {
+        0 => {
+            let status = crate::usb::status().as_bytes();
+            let count = status.len().min(capacity);
+            unsafe {
+                core::ptr::copy_nonoverlapping(status.as_ptr(), destination, count);
+            }
+            count
+        }
+        1 => {
+            let lines = crate::usb::log_lines();
+            let mut copied = 0usize;
+            for line in lines.iter() {
+                if copied >= capacity {
+                    break;
+                }
+                let count = line.len().min(capacity - copied);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        line.as_ptr(),
+                        destination.add(copied),
+                        count,
+                    );
+                }
+                copied += count;
+                if copied < capacity {
+                    unsafe { destination.add(copied).write(b'\\n'); }
+                    copied += 1;
+                }
+            }
+            copied
+        }
+        _ => 0,
     }
 }
 
