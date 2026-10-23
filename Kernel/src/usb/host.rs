@@ -2,7 +2,7 @@ use alloc::sync::Arc;
 use spin::Mutex;
 use usb_oxide::{
     find_hid_interfaces, HidDevice, HidType, MscDevice, Trb, UsbDevice, UsbError, XhciCtrl,
-    trb_type,
+    trb_type, SetupPacket
 };
 
 use crate::dma::MyDma;
@@ -39,10 +39,7 @@ pub fn log_lines() -> alloc::vec::Vec<alloc::string::String> {
 }
 
 fn note(line: alloc::string::String) {
-    let mut log = LOG.lock();
-    if log.len() < 48 {
-        log.push(line);
-    }
+    LOG.lock().push(line);
 }
 
 fn hex16(v: usize) -> alloc::string::String {
@@ -209,6 +206,51 @@ fn init_one(bar0: usize, dma: crate::dma::MyDma) -> bool {
 
         if looks_like_rndis(&config) {
             note(alloc::string::String::from("RNDIS YES"));
+        }
+
+        if config_has_hub(&config) {
+            note(alloc::string::String::from("HUB FOUND"));
+
+            let mut desc = [0u8; 7];
+            match dev.control_transfer(
+                &SetupPacket::hub_get_descriptor(7),
+                Some(&mut desc),
+            ) {
+                Ok(n) if n >= 7
+                    && desc[1] == 0x29
+                    && desc[0] >= 7
+                    && desc[0] as usize <= n =>
+                {
+                    let ports = desc[2];
+                    note(alloc::format!("HUB PORTS {ports}"));
+
+                    for port in 1..=ports {
+                        let req =
+                            SetupPacket::hub_set_port_feature(8, port);
+
+                        match dev.control_transfer(&req, None) {
+                            Ok(_) => {
+                                note(alloc::format!("HUB POWER {port}"));
+                            }
+                            Err(err) => {
+                                note(alloc::format!(
+                                    "HUB POWER FAIL {port} {}",
+                                    err_name(err)
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(n) => {
+                    note(alloc::format!("HUB DESC INVALID {n}"));
+                }
+                Err(err) => {
+                    note(alloc::format!(
+                        "HUB DESC FAIL {}",
+                        err_name(err)
+                    ));
+                }
+            }
         }
 
         let dev = Arc::new(dev);
@@ -518,4 +560,19 @@ fn bios_handoff(bar0: usize) {
         }
         off += next * 4;
     }
+}
+
+
+fn config_has_hub(config: &[u8]) -> bool{//if has usb hub,return true
+    let mut off:usize = 0;
+    while (off + 9) < config.len() {
+        if config[off] == 9 
+        && config[off+1] == 4
+        && config[off+5] ==9
+        {
+            return true;
+        }
+        off += 9;   
+    }
+    return false;
 }
