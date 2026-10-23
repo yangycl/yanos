@@ -16,6 +16,7 @@ section .text
 
 global yanos_get_key
 global yanos_read_file
+global yanos_xhci_query
 global yanos_list_directory
 global yanos_draw_text
 global yanos_draw_rect
@@ -91,6 +92,22 @@ yanos_draw_rect:
     mov eax, 1
     int 0x80
     pop r12
+    pop rbx
+    ret
+
+; unsigned long yanos_xhci_query(unsigned long operation,
+;                                void *destination, unsigned long capacity)
+; SysV args: rdi=operation, rsi=destination, rdx=capacity
+; syscall 6 args: rbx=operation, rdx=destination, rsi=capacity
+yanos_xhci_query:
+    push rbx
+    mov r8, rsi
+    mov r9, rdx
+    mov rbx, rdi
+    mov rdx, r8
+    mov rsi, r9
+    mov eax, 6
+    int 0x80
     pop rbx
     ret
 
